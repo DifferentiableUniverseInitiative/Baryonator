@@ -405,32 +405,46 @@ class hpm_table:
         data = np.zeros(14, dtype=np.float64)
         # psi in particle units 
         lgp = (ip-1)*self.lgpdel + self.lgpmin
+
+        print(ip)
         
         # rho, psi original
         for id in range(0, self.Nrho):
-            print(ip,id)
+            #print(ip,id)
             # Particle density relative to average
             lgd = (id-1)*self.lgddel + self.lgdmin
             # Init
             #data = 0
-            drhomin = np.finfo(np.float64).max
-            dpsimin = np.finfo(np.float64).max
+            drhomin = np.ones_like(self.hpmtabA['psi'])*np.finfo(np.float64).max
+            dpsimin = np.ones_like(self.hpmtabA['psi'])*np.finfo(np.float64).max
             # Find minimum rho difference
             #for im in range(0, self.Nmass):
             #for ir in range(0, self.Nrad):
             drho    = abs((self.hpmtabA['rho'] - lgd)/self.lgddel)
             drhomin = np.minimum(drhomin,drho)
+            drhomin[drhomin>0.5]=0.5
 
-            drhomin = np.maximum(drhomin,0.5)
+            #drhomin = np.maximum(drhomin,0.5)
             # Find minimum psi difference
+            '''
             for im in range(0, self.Nmass):
                 for ir in range(0, self.Nrad):
                     drho = abs((self.hpmtabA['rho'][ir,im] - lgd)/self.lgddel)
                     if (drho <= drhomin):
                         dpsi = abs((self.hpmtabA['psi'][ir,im] - lgp)/self.lgpdel)
                         dpsimin = min(dpsimin,dpsi)
-            dpsimin = max(dpsimin,0.5)
+            ''';
+            #pdb.set_trace()
+            #drho = abs((self.hpmtabA['rho'] - lgd)/self.lgddel)
+            idx  = np.where(drho <= drhomin)[0]
+            if len(idx)>0:
+                dpsi = np.ones_like(drho)*np.finfo(np.float64).max
+                dpsi[idx] = abs((self.hpmtabA['psi'][idx] - lgp)/self.lgpdel)
+                dpsimin   = np.minimum(dpsimin,dpsi)
+            dpsimin[dpsimin>0.5]  = 0.5 
+            #pdb.set_trace()
 
+            '''
             # Loop over mass and radius
             for im in range(0, self.Nmass):
                 for ir in range(0, self.Nrad):
@@ -451,6 +465,28 @@ class hpm_table:
                         data[11] += self.hpmtabA['Pnth'][ir,im] 
                         data[12] += self.hpmtabA['f'][ir,im] 
                         data[13] += self.hpmtabA['fp'][ir,im]
+            ''';
+            drho = abs((self.hpmtabA['rho'] - lgd)/self.lgddel)
+            dpsi = abs((self.hpmtabA['psi'] - lgp)/self.lgpdel)
+
+            #pdb.set_trace()
+            idx  = np.where((drho <= drhomin) & (dpsi <= dpsimin))
+            data[0]  = len(idx)
+            data[1]  = np.sum(self.hpmtabA['M'][idx])
+            data[2]  = np.sum(self.hpmtabA['r'][idx])
+            data[3]  = np.sum(self.hpmtabA['s'][idx])
+            data[4]  = np.sum(self.hpmtabA['x'][idx])
+            data[5]  = np.sum(self.hpmtabA['dm'][idx])
+            data[6]  = np.sum(self.hpmtabA['dg'][idx])
+            data[7]  = np.sum(self.hpmtabA['T'][idx])
+            data[8]  = np.sum(self.hpmtabA['Tsmth'][idx])
+            data[9]  = np.sum(self.hpmtabA['vsq'][idx])
+            data[10] = np.sum(self.hpmtabA['P'][idx])
+            data[11] = np.sum(self.hpmtabA['Pnth'][idx])
+            data[12] = np.sum(self.hpmtabA['f'][idx])
+            data[13] = np.sum(self.hpmtabA['fp'][idx])
+
+
 
             # Save in log form for interpolation
             self.hpmtabB['rho'][id,ip]   = lgd
