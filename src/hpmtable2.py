@@ -28,6 +28,12 @@ def neff_pk_fn(cosmo,keff):
 
     return neff_pk
 
+def tophat_transform(x):
+    tophat_transform = 3*(jnp.sin(x)-jnp.cos(x)*x)/x**3
+    #idx = np.where( jnp.abs(x) < 1E-6)[0]
+    #tophat_transform[idx] = 1 - x**2/10
+       
+    return tophat_transform
 
 def c200c_nfw(cosmo, M200c):
     # Local parameters
@@ -40,7 +46,7 @@ def c200c_nfw(cosmo, M200c):
 
     # Lagrangian radius in comoving Mpc/h
     rho0       = cosmo.Omega_m * jc.constants.rhocrit * 1 # to be changed to proper conversion factor self.cosmo['rhoc_ast']
-    M          = M200c * cosmo.h /Msun_cgs #* cosmo.h
+    M          = M200c * cosmo.h /Msun_cgs #* cosmo.h ----> Mpc/h
     R          = (3*M/(4*jnp.pi*rho0))**(1./3)
     print("R",R)
     #--------XCHECK----------
@@ -53,24 +59,62 @@ def c200c_nfw(cosmo, M200c):
     # this :  0.9606800543807782
     # hyper:  0.960737694441404    
 
-    #neff_pk_fn = jax.grad(lambda k: jnp.log10(jc.power.linear_matter_power(cosmo, k))) #####<_---- different answer
+    #neff_pk_fn = jax.grad(lambda k: jnp.log10(jc.power.linear_matter_power(cosmo, k) )) #####<_---- different answer
+    #jc.power.linear_matter_power(cosmo, k)/2/np.pi**2*k**3 <--- need some scaling of k
     n          = neff_pk_fn(cosmo,k) 
     print('n',n)
     #--------XCHECK----------
     # this :  -2.251191462464597
     # hyper:  -2.25120419419956 
 
-    nu         = 1.686/jc.power.sigmasqr(cosmo, R, jc.transfer.Eisenstein_Hu) 
+
+
+    tmp=np.logspace(-5,5,1001)
+    k  = (tmp[1:]+tmp[:-1])/2
+    dk = tmp[1:]-tmp[:-1]
+
+    pk   = jc.power.linear_matter_power(cosmo, k)/2/np.pi**2*k**3
+    kR   = k*R
+
+    dlnk = dk/k #jnp.log(tmp[1:]/tmp[:-1])#/dk
+    #dlnk = jnp.log(k[1]/k[])/(k2-k1) #equivalent
+    
+    var    = np.sum(pk*tophat_transform(kR)**2*dlnk)
+    sigmaR = jnp.sqrt(var)*jc.background.growth_factor(cosmo, np.array([a])).item()
+
+    #kR = R*k
+    #W  = 3.0*(jnp.sin(kR)/kR**3-jnp.cos(kR)/kR**2)
+    #pk = jc.power.linear_matter_power(cosmo, k)#/2/np.pi**2*k**3
+    #I  = dk*pk*W*W*k*k
+    #sigmaR = np.sum(I)/(2.0*jnp.pi*jnp.pi)
+
+
+    #kr   = k#cosmo%Plin(1,k)
+    #pk   = jc.power.linear_matter_power(cosmo, k)/2/np.pi**2*k**3#cosmo%Plin(3,k)
+    #dlnk = jnp.log(pk[1:]/pk[:-1])/dk
+    #x    = kr*dlnk
+    #pk*tophat_transform(kR)**2*dlnk
+    #TF=0.21371743396866935
+
+    #k = tmp#jnp.exp(np.log(tmp))
+    #dk = 1.0*k
+    #kR = R*k
+    #W  = 3.0*(jnp.sin(kR)/kR**3-jnp.cos(kR)/kR**2)
+    #pk =jc.power.linear_matter_power(cosmo, k)#/2/np.pi**2*k**3
+    #sigmaR = np.sum(dk*pk*W*W*k*k)/(2.0*jnp.pi*jnp.pi)*jc.background.growth_factor(cosmo, np.array([a])).item()
+
+    nu         = 1.686/sigmaR
     print('nu',nu)
+    #pdb.set_trace()
     #--------XCHECK----------
-    # this :  6049922.5
+    # this :  8.500356
     # hyper:  8.49532892283707 
 
     #pdb.set_trace()
     cmin       = phi0 + phi1*n
     numin      = eta0 + eta1*n
     c200c_nfw  = cmin/2*((numin/nu)**alpha + (nu/numin)**beta)
-    #pdb.set_trace()
+    
 
     return c200c_nfw
 
@@ -230,19 +274,19 @@ def table_halo(cosmo,a,icm,M,rx):
     #(M,r) -> compute rho,psi etc.
     M200c   = M/cosmo.h*Msun_cgs
     print("M200c",M200c)
-    #--------XCEHCK----------
+    #--------XCHECK----------
     # this : 2.936226749335696e+47
     # hyper: 2.936226760400337E+047
 
     rho200c = 200*rhocrit_z_cgs(cosmo,a) #rhocrit in cgs units
     print("rho200c",rho200c) 
-    #--------XCEHCK----------
+    #--------XCHECK----------
     # this : 1.1587519e-25
     # hyper: 1.159160489937735E-025
 
     rho500c = 500*rhocrit_z_cgs(cosmo,a) #rhocrit in cgs units
     print("rho500c",rho500c) 
-    #--------XCEHCK----------
+    #--------XCHECK----------
     # this : 2.89688e-25
     # hyper: 2.897901224844337E-025
     
@@ -254,23 +298,23 @@ def table_halo(cosmo,a,icm,M,rx):
     #R200c   = (M200c/1e30/(4*jnp.pi/3*(rho200c*1e30) ))**(1./3)*(1.e30)**(1./3)*(1.e30)**(1./3) # avoid float64
     R200c   = (M200c/(4*np.pi/3*( np.float64(rho200c) ) ))**(1./3) # avoid float64
     print('R200c',R200c)
-    #--------XCEHCK----------
+    #--------XCHECK----------
     # this : 8.457399482718055e+23
     # hyper: 8.456419471688975E+023
 
-    c200c   = c200c_nfw(cosmo,M200c)
+    c200c   = c200c_nfw(cosmo,M200c) #<---- still room for improvement
     print('c200c',c200c)
-    #--------XCEHCK----------
-    # this : 188470120000.0
+    #--------XCHECK----------
+    # this : 8.625189
     # hyper: 8.61719816540954  
 
     rs      = R200c/c200c
     print('rs',rs)
-    #--------XCEHCK----------
-    # this :  15269598677358.645
+    #--------XCHECK----------
+    # this :  9.8051515e+22
     # hyper:  9.813421148458727E+022
 
-    sys.exit()
+    #sys.exit()
     
 
     #print('bb')
