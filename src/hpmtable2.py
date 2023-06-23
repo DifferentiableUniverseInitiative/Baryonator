@@ -328,7 +328,8 @@ def table_halo(cosmo,a,icm,M,rx):
     #sys.exit()
     #M200c   = 10**((im-1)*self.lgMdel + self.lgMmin) / self.cosmo['h'] * Msun_cgs
     #R200c   = (M200c/1e30/(4*jnp.pi/3*(rho200c*1e30) ))**(1./3)*(1.e30)**(1./3)*(1.e30)**(1./3) # avoid float64
-    R200c   = (M200c/(4*jnp.pi/3*( jnp.float64(rho200c) ) ))**(1./3) # avoid float64
+    R200c   = ( (M200c/1e30)/(4*np.pi/3*((rho200c*1e30) ) ))**(1./3) *(1e30)**(1./3)*(1e30)**(1./3) # avoid float64
+    #pdb.set_trace()
     print('R200c',R200c)
     #--------XCHECK----------
     # this : 8.457399482718055e+23
@@ -464,20 +465,20 @@ def table_halo(cosmo,a,icm,M,rx):
 def table_icm(cosmo,a,icm,rho,psi):
 
     Mmin, Mmax, lgMdel = 1E8, 5E15, 1E-2
-    Nmass  = int(1 + np.round((np.log10(Mmax) - np.log10(Mmin))/lgMdel))
+    Nmass  = int(1 + jnp.round((jnp.log10(Mmax) - jnp.log10(Mmin))/lgMdel))
 
     rmin, rmax, lgrdel = 1E-2, 4., 1E-2
-    Nrad   = int(1 + np.round((np.log10(rmax) - np.log10(rmin))/lgrdel))
+    Nrad   = int(1 + np.round((jnp.log10(rmax) - jnp.log10(rmin))/lgrdel))
 
     # Arbitrary gridding scheme to compute table
-    M200c  = 10**((np.arange(Nmass))*lgMdel + np.log10(Mmin))/cosmo.h * Msun_cgs
-    r      = 10**((np.arange(Nrad))*lgrdel  + np.log10(rmin))*1e24 # proxy for R200c
+    M200c  = 10**((jnp.arange(Nmass))*lgMdel + jnp.log10(Mmin))/cosmo.h * Msun_cgs
+    r      = 10**((jnp.arange(Nrad))*lgrdel  + jnp.log10(rmin))*1e24 # proxy for R200c
 
 
-    psigrid    = np.zeros((Nmass,Nrad)) 
-    rhogrid    = np.zeros((Nmass,Nrad)) 
-    Tgrid      = np.zeros((Nmass,Nrad)) 
-    Pgrid      = np.zeros((Nmass,Nrad)) 
+    psigrid    = jnp.zeros((Nmass,Nrad)) 
+    rhogrid    = jnp.zeros((Nmass,Nrad)) 
+    Tgrid      = jnp.zeros((Nmass,Nrad)) 
+    Pgrid      = jnp.zeros((Nmass,Nrad)) 
     
     #(rho,psi) -> compute M,r,T,P
     #M_grid, r_grid  = np.meshgrid(M200c,r)
@@ -528,17 +529,17 @@ def table_icm(cosmo,a,icm,rho,psi):
     664.926049658025
     """;
 
-    lgp = (np.arange(Npsi)-1)*lgpdel + lgpmin
-    lgd = (np.arange(Nrho)-1)*lgddel + lgdmin
+    lgp = (jnp.arange(Npsi)-1)*lgpdel + lgpmin
+    lgd = (jnp.arange(Nrho)-1)*lgddel + lgdmin
 
-    drhomin = np.ones_like(icmpsi)*np.finfo(np.float64).max
+    drhomin = jnp.ones_like(icmpsi)*jnp.finfo(np.float64).max
     drho    = abs((rhogrid - lgd)/lgddel)
-    drhomin = np.minimum(drhomin,drho)
+    drhomin = jnp.minimum(drhomin,drho)
     drhomin[drhomin>0.5] = 0.5
 
-    dpsimin = np.ones_like(icmrho)*np.finfo(np.float64).max
+    dpsimin = np.ones_like(icmrho)*jnp.finfo(np.float64).max
     dpsi    = abs((psigrid - lgp)/lgpdel)
-    dpsimin = np.minimum(dpsimin,dpsi)
+    dpsimin = jnp.minimum(dpsimin,dpsi)
     dpsimin[dpsimin>0.5] = 0.5  
 
     #pdb.set_trace()
