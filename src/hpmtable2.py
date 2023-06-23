@@ -1,5 +1,5 @@
 import os,sys
-#os.environ['JAX_ENABLE_X64']='True'
+os.environ['JAX_ENABLE_X64']='True'
 
 from scipy.interpolate import CubicSpline
 import numpy as np
@@ -16,13 +16,13 @@ def neff_pk_fn(cosmo,keff):
     dlnk  = 0.01
 
     for i in [-1, 1]:
-        k    = keff*np.exp(i*dlnk/2)
+        k    = keff*jnp.exp(i*dlnk/2)
         q    = k*theta**2/gamma
-        L0   = np.log(5.43656 + 1.8*q)
+        L0   = jnp.log(5.43656 + 1.8*q)
         C0   = 14.2 + 731/(1 + 62.5*q)
         T0   = L0/(L0 + C0*q**2)
         P    = k**cosmo.n_s*T0**2
-        dlnP = dlnP + i*np.log(P)
+        dlnP = dlnP + i*jnp.log(P)
 
     neff_pk = dlnP/dlnk
 
@@ -69,18 +69,18 @@ def c200c_nfw(cosmo, M200c):
 
 
 
-    tmp=np.logspace(-5,5,1001)
+    tmp=jnp.logspace(-5,5,1001)
     k  = (tmp[1:]+tmp[:-1])/2
     dk = tmp[1:]-tmp[:-1]
 
-    pk   = jc.power.linear_matter_power(cosmo, k)/2/np.pi**2*k**3
+    pk   = jc.power.linear_matter_power(cosmo, k)/2/jnp.pi**2*k**3
     kR   = k*R
 
     dlnk = dk/k #jnp.log(tmp[1:]/tmp[:-1])#/dk
     #dlnk = jnp.log(k[1]/k[])/(k2-k1) #equivalent
     
-    var    = np.sum(pk*tophat_transform(kR)**2*dlnk)
-    sigmaR = jnp.sqrt(var)*jc.background.growth_factor(cosmo, np.array([a])).item()
+    var    = jnp.sum(pk*tophat_transform(kR)**2*dlnk)
+    sigmaR = jnp.sqrt(var)*jc.background.growth_factor(cosmo, jnp.array([a])).item()
 
     #kR = R*k
     #W  = 3.0*(jnp.sin(kR)/kR**3-jnp.cos(kR)/kR**2)
@@ -235,7 +235,7 @@ def dPdx_tot(icm,x):
     return dPdx_tot
 
 def psi_nfw(x,M,R,c):
-    rhos  = (M/1e30)/(4*np.pi*(R/1e20)**3)*(c)**3/(jnp.log(1+c) - c/(1+c))*1e-30
+    rhos  = (M/1e30)/(4*jnp.pi*(R/1e20)**3)*(c)**3/(jnp.log(1+c) - c/(1+c))*1e-30
     print('rhos',rhos)
     #--------XCHECK----------
     # this : 1.8115183e-23
@@ -328,7 +328,7 @@ def table_halo(cosmo,a,icm,M,rx):
     #sys.exit()
     #M200c   = 10**((im-1)*self.lgMdel + self.lgMmin) / self.cosmo['h'] * Msun_cgs
     #R200c   = (M200c/1e30/(4*jnp.pi/3*(rho200c*1e30) ))**(1./3)*(1.e30)**(1./3)*(1.e30)**(1./3) # avoid float64
-    R200c   = (M200c/(4*np.pi/3*( np.float64(rho200c) ) ))**(1./3) # avoid float64
+    R200c   = (M200c/(4*jnp.pi/3*( jnp.float64(rho200c) ) ))**(1./3) # avoid float64
     print('R200c',R200c)
     #--------XCHECK----------
     # this : 8.457399482718055e+23
