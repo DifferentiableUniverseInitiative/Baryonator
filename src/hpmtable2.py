@@ -609,13 +609,12 @@ a=0.166666667
 table_halo(cosmo,a,icm,M,r) 
 
 
-import jax
-import jax.numpy as jnp
-batched_r      = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
-batched_Mr     = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
-m_grid = jnp.logspace(12,14)
-r_grid = jnp.linspace(0.1,2) #jnp.meshgrid(jnp.logspace(12,14),jnp.linspace(0.1,2))
-res            = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
+print('------------------table_icm-------------------')
+batched_r  = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
+batched_Mr = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
+m_grid     = jnp.logspace(12,14)
+r_grid     = jnp.linspace(0.1,2) #jnp.meshgrid(jnp.logspace(12,14),jnp.linspace(0.1,2))
+res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
 #print('------------------table_icm-------------------')
 #rho = 1e-2
 #psi = 3.6779604e-06
