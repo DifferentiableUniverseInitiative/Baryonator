@@ -410,19 +410,19 @@ def table_halo(cosmo,a,icm,M,rx):
     # this :  1.3663051e-08
     # hyper:  6.770158664810688E-010
     
-    r = rx*R200c
+    ry = rx*R200c
     print('r',r)
     #--------XCHECK----------
     # this :  8.457127621049304e+21
     # hyper:  8.456419282673272E+021
     
-    s = r/R500c
+    s = ry/R500c
     print('s',s)
     #--------XCHECK----------
     # this :  0.014726206
     # hyper:  1.472694084377126E-002
     
-    x = r/rs
+    x = ry/rs
     print('x',x)
     #--------XCHECK----------
     # this :  0.08625188
@@ -496,7 +496,7 @@ def table_halo(cosmo,a,icm,M,rx):
     #Tsmth   = T 
     #print(M,r,s,x,rho,psi,T,vsq,P,Pnth)
     #return M,r,s,x,rho,psi,T,vsq,P,Pnth#,f,fp
-    return M,r,s,x,rho,psi,T,P#,f,fp
+    return M,rx,s,x,rho,psi,T,P#,f,fp
 
 
 
@@ -613,7 +613,8 @@ import jax
 import jax.numpy as jnp
 batched_r      = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
 batched_Mr     = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
-m_grid, r_grid = jnp.meshgrid(jnp.logspace(12,14),jnp.linspace(0.1,2))
+m_grid = jnp.logspace(12,14)
+r_grid = jnp.linspace(0.1,2) #jnp.meshgrid(jnp.logspace(12,14),jnp.linspace(0.1,2))
 res            = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
 #print('------------------table_icm-------------------')
 #rho = 1e-2
