@@ -1,5 +1,5 @@
 import os,sys
-os.environ['JAX_ENABLE_X64']='True'
+# os.environ['JAX_ENABLE_X64']='True'
 
 from scipy.interpolate import CubicSpline
 import numpy as np
