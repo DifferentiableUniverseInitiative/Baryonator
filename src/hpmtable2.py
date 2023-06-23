@@ -127,7 +127,7 @@ def M500c_from_M200c(cosmo, M200c, R200c, c200c, rho500c):
     x1  = 0
     x2  = c200c
     rho = 0
-    #pdb.set_trace()
+    '''
     while (abs(rho/(rho500c) - 1) > 1E-4):
 
         #print( abs(rho/(rho500c) - 1) )
@@ -144,7 +144,38 @@ def M500c_from_M200c(cosmo, M200c, R200c, c200c, rho500c):
         else:
             x2 = x
         #print(  abs(rho/(rho500c) - 1) )
+
     M500c_from_M200c = M#*1e30
+    print("OLD M500c_from_M200c:",M500c_from_M200c)
+    '''
+    #--------------------------------------------------------------------------
+
+    rs = R200c/c200c
+    Am = M200c/1e24/(jnp.log(1+c200c) - c200c/(1+c200c))
+    x   = np.logspace(0,c200c,100001)
+    R   = x*rs
+    M   = Am*(jnp.log(1+x) - x/(1+x))
+    rho = M/(4*jnp.pi/3*(R/1e12)**3)*1e24/1e12/1e12/1e12 
+    
+    #idx  = jnp.argmin(np.abs(rho/rho500c-1) )
+    #print(M[idx])
+    Mi  = jnp.interp(rho500c,rho[::-1],M[::-1]) # somehow doesnt like decreasing function
+
+    M500c_from_M200c = Mi
+    print("NEW M500c_from_M200c:",M500c_from_M200c)
+    #jnp.interp(x,R)
+    #pdb.set_trace()
+
+    #rs = R200c/c200c
+    #Am = M200c/1e24/(jnp.log(1+c200c) - c200c/(1+c200c))
+    # Calc M500c iteratively
+    #x1  = 0
+    #x2  = c200c
+    #rho = 0
+
+    
+
+
     ######## REMEMBER TO MULTIPLY BY 1e24
     #pdb.set_trace()
         
@@ -468,13 +499,13 @@ def table_icm(cosmo,a,icm,rho,psi):
     Nmass  = int(1 + jnp.round((jnp.log10(Mmax) - jnp.log10(Mmin))/lgMdel))
 
     rmin, rmax, lgrdel = 1E-2, 4., 1E-2
-    Nrad   = int(1 + np.round((jnp.log10(rmax) - jnp.log10(rmin))/lgrdel))
+    Nrad   = int(1 + jnp.round((jnp.log10(rmax) - jnp.log10(rmin))/lgrdel))
 
     # Arbitrary gridding scheme to compute table
-    M200c  = 10**((jnp.arange(Nmass))*lgMdel + jnp.log10(Mmin))/cosmo.h * Msun_cgs
-    r      = 10**((jnp.arange(Nrad))*lgrdel  + jnp.log10(rmin))*1e24 # proxy for R200c
+    M      = 10**((jnp.arange(Nmass))*lgMdel + jnp.log10(Mmin)) #/cosmo.h #* Msun_cgs <--------Msun/h
+    r      = 10**((jnp.arange(Nrad))*lgrdel  + jnp.log10(rmin))#*1e24 # proxy for R200c
 
-
+    #pdb.set_trace()
     psigrid    = jnp.zeros((Nmass,Nrad)) 
     rhogrid    = jnp.zeros((Nmass,Nrad)) 
     Tgrid      = jnp.zeros((Nmass,Nrad)) 
@@ -487,10 +518,10 @@ def table_icm(cosmo,a,icm,rho,psi):
         for j in range(Nrad):
             #pdb.set_trace()
             icmM,icmr,icms,icmx,icmrho,icmpsi,icmT,icmP = table_halo(cosmo,a,icm,M200c[i],r[j])#.reshape((M_arr.shape[0],r_arr.shape[0]))
-            psigrid[i,j] = icmpsi
-            rhogrid[i,j] = icmrho
-            Tgrid[i,j]   = icmT
-            Pgrid[i,j]   = icmP
+            psigrid.at[i,j].set(icmpsi)
+            rhogrid.at[i,j].set(icmrho)
+            Tgrid.at[i,j].set(icmT)
+            Pgrid.at[i,j].set(icmP)
             
             c+=1
         print(i)
@@ -507,7 +538,7 @@ def table_icm(cosmo,a,icm,rho,psi):
     lgddel = 5E-2
     lgdmin = jnp.log10(dmin)
     lgdmax = jnp.log10(dmax)
-    Nrho   = 1 + np.int((lgdmax - lgdmin)/lgddel)
+    Nrho   = 1 + jnp.int((lgdmax - lgdmin)/lgddel)
 
 
     #! psi range in particle units
@@ -516,7 +547,7 @@ def table_icm(cosmo,a,icm,rho,psi):
     lgpdel = 5E-2
     lgpmin = jnp.log10(pmin)
     lgpmax = jnp.log10(pmax)
-    Npsi   = 1 + np.int((lgpmax - lgpmin)/lgpdel)
+    Npsi   = 1 + jnp.int((lgpmax - lgpmin)/lgpdel)
 
     """
     write(*,*) part%pmin
@@ -532,12 +563,12 @@ def table_icm(cosmo,a,icm,rho,psi):
     lgp = (jnp.arange(Npsi)-1)*lgpdel + lgpmin
     lgd = (jnp.arange(Nrho)-1)*lgddel + lgdmin
 
-    drhomin = jnp.ones_like(icmpsi)*jnp.finfo(np.float64).max
+    drhomin = jnp.ones_like(icmpsi)*jnp.finfo(jnp.float64).max
     drho    = abs((rhogrid - lgd)/lgddel)
     drhomin = jnp.minimum(drhomin,drho)
     drhomin[drhomin>0.5] = 0.5
 
-    dpsimin = np.ones_like(icmrho)*jnp.finfo(np.float64).max
+    dpsimin = np.ones_like(icmrho)*jnp.finfo(jnp.float64).max
     dpsi    = abs((psigrid - lgp)/lgpdel)
     dpsimin = jnp.minimum(dpsimin,dpsi)
     dpsimin[dpsimin>0.5] = 0.5  
@@ -546,7 +577,7 @@ def table_icm(cosmo,a,icm,rho,psi):
     
     idx  = np.where((drho <= drhomin) & (dpsi <= dpsimin))
     
-    return icmrho,icmpsi,np.mean(M[idx]),np.mean(r[idx]),np.mean(s[idx]),np.mean(x[idx]),np.mean(T[idx]),np.mean(vsq[idx]),np.mean(P[idx]),np.mean(Pnth[idx])
+    return rho,psi,jnp.mean(M[idx]),jnp.mean(r[idx]),jnp.mean(T[idx]),jnp.mean(P[idx])#,jnp.mean(s[idx]),jnp.mean(x[idx]),jnp.mean(vsq[idx]),jnp.mean(Pnth[idx])
 
 mH_cgs   = 1.67223e-24
 cosmo = jc.Planck15()
@@ -563,11 +594,14 @@ icm['gamma']  = 0.3081
 icm['alpha']  = 1.0510
 icm['beta']   = 5.4905
 
+
+print('------------------table_halo-------------------')
 M=1e14 #M in units of Msun/h
 r=9.999999776482584E-003
 a=0.166666667
 table_halo(cosmo,a,icm,M,r) 
 
-#rho = 1e-2 
-#psi = 1.72e-9
+#print('------------------table_icm-------------------')
+#rho = 1e-2
+#psi = 3.6779604e-06
 #table_icm(cosmo,a,icm,rho,psi)
