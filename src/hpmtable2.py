@@ -1,5 +1,7 @@
 import os,sys
 # os.environ['JAX_ENABLE_X64']='True'
+from jax import config
+config.update("jax_enable_x64", True)
 
 from scipy.interpolate import CubicSpline
 import numpy as np
@@ -121,13 +123,14 @@ def c200c_nfw(cosmo, M200c):
 
 def M500c_from_M200c(cosmo, M200c, R200c, c200c, rho500c):
     
+    '''
     rs = R200c/c200c
     Am = M200c/1e24/(jnp.log(1+c200c) - c200c/(1+c200c))
     # Calc M500c iteratively
     x1  = 0
     x2  = c200c
     rho = 0
-    '''
+    
     while (abs(rho/(rho500c) - 1) > 1E-4):
 
         #print( abs(rho/(rho500c) - 1) )
@@ -152,7 +155,7 @@ def M500c_from_M200c(cosmo, M200c, R200c, c200c, rho500c):
 
     rs = R200c/c200c
     Am = M200c/1e24/(jnp.log(1+c200c) - c200c/(1+c200c))
-    x   = np.logspace(0,c200c,100001)
+    x   = jnp.logspace(0,c200c,100001)
     R   = x*rs
     M   = Am*(jnp.log(1+x) - x/(1+x))
     rho = M/(4*jnp.pi/3*(R/1e12)**3)*1e24/1e12/1e12/1e12 
@@ -286,10 +289,14 @@ def psi_nfw(x,M,R,c):
     
     #pdb.set_trace()
     #pdb.set_trace()
-    if jnp.abs(x-1) > 1E-6:
-        psi_nfw = Apsi*jnp.log(x)/(x**2 - 1)
-    else:
-        psi_nfw = Apsi*(1-x/2)
+
+    #if jnp.abs(x-1) > 1E-6:
+    #    psi_nfw = Apsi*jnp.log(x)/(x**2 - 1)
+    #else:
+    #    psi_nfw = Apsi*(1-x/2)
+
+    psi_nfw=jnp.where(jnp.abs(x-1) < 1E-6, Apsi*(1-x/2), Apsi*jnp.log(x)/(x**2 - 1) )  
+
     return psi_nfw
 
 
@@ -601,6 +608,13 @@ r=9.999999776482584E-003
 a=0.166666667
 table_halo(cosmo,a,icm,M,r) 
 
+
+import jax
+import jax.numpy as jnp
+batched_r      = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
+batched_Mr     = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
+m_grid, r_grid = jnp.meshgrid(jnp.logspace(13.99,14.01),jnp.linspace(0.1666666,0.1666667))
+res            = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
 #print('------------------table_icm-------------------')
 #rho = 1e-2
 #psi = 3.6779604e-06
