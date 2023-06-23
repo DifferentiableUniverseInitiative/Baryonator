@@ -165,14 +165,29 @@ def P500c_gnfw(cosmo,a,icm,M):
     # Arnaud et al
     h70    = cosmo.h/0.7
 
-    hsq    = cosmo.Omega_m/a**3 + cosmo.Omega_de #in the original code there is also Omega_r/a**4
-    #hsq      = cosmo%or/a**4 + cosmo%om/a**3 + cosmo%ol
-
-    Hz     = (cosmo.h*100)*jnp.sqrt(hsq)
+    hsq    = 8.5e-5/a**4+cosmo.Omega_m/a**3 + cosmo.Omega_de #in the original code there is also Omega_r/a**4
+    
+    Hz     = H0_cgs*(cosmo.h)*jnp.sqrt(hsq)
+    print('Hz',Hz)
+    #--------XCHECK----------
+    # this :  1.7999619e-17
+    # hyper:  1.799961888504084E-017  
 
     hz     = Hz/(H0_cgs*cosmo.h)
-    P500c_gnfw = 1.65*eV2erg*(icm['mue']/icm['mu'])*jnp.power(hz/1e19, 8./3) * (M/(3E14*(Msun_cgs/1e24)/h70))**(2./3)*jnp.power(h70, 2)
+    #print('Hz',Hz)
+    #print('braket',(H0_cgs*cosmo.h))
+    print('hz',hz)
+    #--------XCHECK----------
+    # this :  8.198942
+    # hyper:  8.19894261475222  
+
+
+    P500c_gnfw = 1.65*eV2erg*(icm['mue']/icm['mu'])*jnp.power(hz, 8./3) * (M/(3E14*(Msun_cgs/1e24)/h70))**(2./3)*jnp.power(h70, 2)
     #pdb.set_trace()
+    print('P500c_gnfw',P500c_gnfw)
+    #--------XCHECK----------
+    # this :  6.770829e-10
+    # hyper:  6.770158664810687E-010
     return P500c_gnfw
 
 def rho_nfw(x, M, R, c):
@@ -186,8 +201,9 @@ def rho_nfw(x, M, R, c):
     return A*B*C
 
 def acc_nfw(x, M, R, c):
+    #a=-G_cgs*(M/1e30)/(R*x/c/1e20)**2*(jnp.log(1+x) - x/(1+x))/(jnp.log(1+c) - c/(1+c))*1e-10
     #pdb.set_trace()
-    return -G_cgs*(M/1e30)/(R*x/c)**2*(jnp.log(1+x) - x/(1+x))/(jnp.log(1+c) - c/(1+c))*1e30
+    return -G_cgs*(M/1e30)/(R*x/c/1e20)**2*(jnp.log(1+x) - x/(1+x))/(jnp.log(1+c) - c/(1+c))*1e-10
 
 def P_gnfw(icm,x):
     # Dimensionless pressure profile
@@ -219,9 +235,25 @@ def dPdx_tot(icm,x):
     return dPdx_tot
 
 def psi_nfw(x,M,R,c):
-    rhos  = (M/1e30)/(4*np.pi*(R/1e14)**3)*(c/1e14)**3/(jnp.log(1+c) - c/(1+c))*1e30
+    rhos  = (M/1e30)/(4*np.pi*(R/1e20)**3)*(c)**3/(jnp.log(1+c) - c/(1+c))*1e-30
+    print('rhos',rhos)
+    #--------XCHECK----------
+    # this : 1.8115183e-23
+    # hyper: 1.807925321299102E-023
+
     rs    = R/c
+    print('rs',rs)
+    #--------XCHECK----------
+    # this : 9.8051515e+22
+    # hyper: 9.813421148458727E+022
+    
     Apsi  = 4*jnp.pi*G_cgs*rhos*rs
+    print('Apsi',Apsi)
+    #--------XCHECK----------
+    # this : 1.4897473e-06
+    # hyper:  1.487665285580003E-006
+    
+    #pdb.set_trace()
     #pdb.set_trace()
     if jnp.abs(x-1) > 1E-6:
         psi_nfw = Apsi*jnp.log(x)/(x**2 - 1)
@@ -314,46 +346,110 @@ def table_halo(cosmo,a,icm,M,rx):
     # this :  9.8051515e+22
     # hyper:  9.813421148458727E+022
 
-    #sys.exit()
-    
-
     #print('bb')
     M500c   = M500c_from_M200c(cosmo,M200c,R200c,c200c,rho500c) # the answer is divided by 1e24
+    print('M500c',M500c)
+    #--------XCHECK----------
+    # this :  2.2985634e+47
+    # hyper:  2.298221906926749E+047
+    
     R500c   = (M500c/(4*jnp.pi/3*rho500c*1e30))**(1./3)*(1e24)**(1./3)*(1e30)**(1./3)
+    print('R500c',R500c)
+    #--------XCHECK----------
+    # this :  5.74291e+23
+    # hyper:  5.742142494073986E+023
+    
     c500c   = R500c/rs
+    print('c500c',c500c)
+    #--------XCHECK----------
+    # this :  5.8570333
+    # hyper:  5.85131566984245
+    
     P500c   = P500c_gnfw(cosmo,a,icm,M500c)
-    #pdb.set_trace()
-
-    #print('cc')
-    #r = 10**((ir-1)*self.lgrdel + self.lgrmin)*R200c
+    print('P500c',P500c)
+    #--------XCHECK----------
+    # this :  1.3663051e-08
+    # hyper:  6.770158664810688E-010
+    
     r = rx*R200c
-    s = rx/R500c
-    x = rx/rs
-    #pdb.set_trace()
+    print('r',r)
+    #--------XCHECK----------
+    # this :  8.457127621049304e+21
+    # hyper:  8.456419282673272E+021
+    
+    s = r/R500c
+    print('s',s)
+    #--------XCHECK----------
+    # this :  0.014726206
+    # hyper:  1.472694084377126E-002
+    
+    x = r/rs
+    print('x',x)
+    #--------XCHECK----------
+    # this :  0.08625188
+    # hyper:  8.617197972800157E-002
         
     # NFW
     #pdb.set_trace()
     #print('dd')
     dm = rho_nfw(x,M200c,R200c,c200c)#;print(x,M200c,R200c,c200c,dm)
+    print('dm',dm)
+    #--------XCHECK----------
+    # this :  1.7799716e-22
+    # hyper:  1.778349949090758E-022
+    
     f  = acc_nfw(x,M200c,R200c,c200c)#;print(f)
     f  = abs(f)
+    print('f',f)
+    #--------XCHECK----------
+    # this :  6.6681764e-07
+    # hyper:  6.659556321600092E-007
+    
+
 
     # GNFW
     #print('ee')
     P       = P500c*P_gnfw(icm,s)#;print(P)
+    print('P',P)
+    #--------XCHECK----------
+    # this :  1.8522899e-08
+    # hyper:  1.852071281979021E-008
+
     #Pnth    = P500c*Pnth_gnfw(icm,s)
     #dPdr    = P500c*dPdx_gnfw(icm,s)/R500c
     dPtotdr = P500c*dPdx_tot(icm,s)/R500c
+    print('dPtotdr',dPtotdr)
+    #--------XCHECK----------
+    # this :  -9.100081e-31
+    # hyper:  -9.099857761046103E-031
+
     dg      = abs(dPtotdr/f)
+    print('dg',dg)
+    #--------XCHECK----------
+    # this :  1.3647031e-24
+    # hyper:  1.366436038919133E-024
+
     #####fp      = abs(dPdr/dg)
-    T       = P/(k_cgs*dg/icm['mu'])
+    T       = P/(k_cgs*(dg*1e24)/icm['mu'])*1e24
+    #pdb.set_trace()
+    print('T',T)
+    #--------XCHECK----------
+    # this :  96701032
+    # hyper:  96566999.2430575
+
     #vsq     = 3*Pnth/dg
 
     rho     = dm
     psi     = abs(psi_nfw(x,M200c,R200c,c200c))
+    print('psi',psi)
+    #--------XCHECK----------
+    # this :  3.677963e-06
+    # hyper:  3.674160763279385E-006
+
+
     #print('ff')
-    print("rho",rho)
-    print("psi",psi)
+    #print("rho",rho)
+    #print("psi",psi)
             
     # Here no smoothing is required because we are just computing the exact values
     #rhosmth = rho 
@@ -467,7 +563,7 @@ icm['alpha']  = 1.0510
 icm['beta']   = 5.4905
 
 M=1e14 #M in units of Msun/h
-r=1
+r=9.999999776482584E-003
 a=0.166666667
 table_halo(cosmo,a,icm,M,r) 
 
