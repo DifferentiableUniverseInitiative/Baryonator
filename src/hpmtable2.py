@@ -613,7 +613,7 @@ import jax
 import jax.numpy as jnp
 batched_r      = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
 batched_Mr     = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
-m_grid, r_grid = jnp.meshgrid(jnp.logspace(13.99,14.01),jnp.linspace(0.1666666,0.1666667))
+m_grid, r_grid = jnp.meshgrid(jnp.logspace(12,14),jnp.linspace(0.1,2))
 res            = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
 #print('------------------table_icm-------------------')
 #rho = 1e-2
