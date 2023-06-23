@@ -328,7 +328,8 @@ def table_halo(cosmo,a,icm,M,rx):
     #sys.exit()
     #M200c   = 10**((im-1)*self.lgMdel + self.lgMmin) / self.cosmo['h'] * Msun_cgs
     #R200c   = (M200c/1e30/(4*jnp.pi/3*(rho200c*1e30) ))**(1./3)*(1.e30)**(1./3)*(1.e30)**(1./3) # avoid float64
-    R200c   = (M200c/(4*np.pi/3*(rho200c ) ))**(1./3) # avoid float64
+    R200c   = ( (M200c/1e30)/(4*np.pi/3*((rho200c*1e30) ) ))**(1./3) *(1e30)**(1./3)*(1e30)**(1./3) # avoid float64
+    #pdb.set_trace()
     print('R200c',R200c)
     #--------XCHECK----------
     # this : 8.457399482718055e+23
