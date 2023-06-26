@@ -16,6 +16,7 @@ from hpmtable2 import *
 
 import numpy as np
 import pdb
+import time
 
 # this needs to be jaxed
 from scipy.interpolate import RegularGridInterpolator
@@ -223,7 +224,7 @@ def make_HPM_table_interpolator():
     return intpT, intpP
 
 
-def HPM_GPmodel(rho,psi,a, logMmin=8,logMmax=16,NM=100,rmin=0.1,rmax=4,Nr=100):
+def HPM_GPmodel(rho,psi,a, logMmin=8,logMmax=16,NM=50,rmin=0.1,rmax=4,Nr=50):
     """Takes rho and psi and extracts the inverse mapping via
      HPM table to predict the value of T & P.
 
@@ -246,11 +247,12 @@ def HPM_GPmodel(rho,psi,a, logMmin=8,logMmax=16,NM=100,rmin=0.1,rmax=4,Nr=100):
 
     # First construct a table to map M/r -> rho/psi
     batched_r  = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
-    batched_Mr = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
+    batched_Mr = jax.vmap(batched_r, in_axes=[None,None,None,0,None]); del batched_r
     m_grid     = jnp.logspace(logMmin,logMmax,NM) # Msun/h
     r_grid     = jnp.linspace(rmin,rmax,Nr)# unitless, to be multiplied by R200c
-    res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
-    M,rx,s,x,rho,psi,T,P = res
+    res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten());del batched_Mr
+    M,rx,_,_,rho,psi,T,P = res
+    del res
 
     # Use GP to make an interpolate to apply a reverse mapping
     tfb = tfp.bijectors
@@ -271,7 +273,7 @@ def HPM_GPmodel(rho,psi,a, logMmin=8,logMmax=16,NM=100,rmin=0.1,rmax=4,Nr=100):
                                                   observation_index_points=jnp.stack([np.log10(rho).flatten(), np.log10(psi).flatten()], axis=1),
                                                   observations=np.log10(P).flatten(),
                                                 )
-    return model_T.mean(), model_P.mean()
+    return 10**model_T.mean(), 10**model_P.mean()
 
 
 
@@ -340,7 +342,7 @@ DM_mass = []
 Temperature = []
 Pressure = []
 
-intpT, intpP = make_HPM_table_interpolator()
+#intpT, intpP = make_HPM_table_interpolator()
 
 for i in range(n_lens):
 
@@ -377,8 +379,10 @@ for i in range(n_lens):
     print("rho/rho_m", (total_mass_egd/np.mean(total_mass_egd)).flatten())
     #Tf = intpT( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
     #Pf = intpP( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
+    t0 = time.time()
     Tf,Pf = HPM_GPmodel((total_mass_egd/np.mean(total_mass_egd)).flatten(), (R_fscalar_new.real).flatten(), a_center[i])
-
+    t1 = time.time()
+    print( t1-t0)
     Total_mass.append(total_mass_egd)
     Total_delta.append(total_delta_egd)
     DM_mass.append(egd_rho_dm * Msun_per_particle[i])
