@@ -37,7 +37,7 @@ def tophat_transform(x):
        
     return tophat_transform
 
-def c200c_nfw(cosmo, M200c):
+def c200c_nfw(cosmo, M200c,verbose=False):
     # Local parameters
     kappa,alpha,beta,phi0,phi1,eta0,eta1 = 1.00,1.08,1.77,6.58,1.27,7.28,1.56
 
@@ -165,7 +165,7 @@ def M500c_from_M200c(cosmo, M200c, R200c, c200c, rho500c):
     Mi  = jnp.interp(rho500c,rho[::-1],M[::-1]) # somehow doesnt like decreasing function
 
     M500c_from_M200c = Mi
-    if verbose: print("NEW M500c_from_M200c:",M500c_from_M200c)
+    #if verbose: print("NEW M500c_from_M200c:",M500c_from_M200c)
 
     #jnp.interp(x,R)
     #pdb.set_trace()
@@ -196,7 +196,7 @@ def M500c_from_M200c(cosmo, M200c, R200c, c200c, rho500c):
     c_alpha = 0.26
 """
  
-def P500c_gnfw(cosmo,a,icm,M):
+def P500c_gnfw(cosmo,a,icm,M,verbose=False):
     # Arnaud et al
     h70    = cosmo.h/0.7
 
@@ -269,7 +269,7 @@ def dPdx_tot(icm,x):
     dPdx_tot   = (dPthdx*fth-dfthdx*Pth)/fth**2
     return dPdx_tot
 
-def psi_nfw(x,M,R,c):
+def psi_nfw(x,M,R,c,verbose=False):
     rhos  = (M/1e30)/(4*jnp.pi*(R/1e20)**3)*(c)**3/(jnp.log(1+c) - c/(1+c))*1e-30
     if verbose: print('rhos',rhos)
     #--------XCHECK----------
@@ -323,7 +323,7 @@ k_cgs    = 1.38066e-16
 #T   = func(M,r)
 
 
-def table_halo(cosmo,a,icm,M,rx):
+def table_halo(cosmo,a,icm,M,rx,verbose=False):
     '''
     Parameters
     ----------
@@ -589,7 +589,7 @@ def table_icm(cosmo,a,icm,rho,psi):
 
 
 if __name__ == "__main__":
-    
+
     verbose=False
     mH_cgs   = 1.67223e-24
     cosmo = jc.Planck15()
