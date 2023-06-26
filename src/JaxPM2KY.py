@@ -1,4 +1,4 @@
-
+import pdb
 import jax
 import jax.numpy as jnp
 import jax_cosmo as jc
@@ -11,6 +11,8 @@ from jaxpm.lensing import density_plane, convergence_Born
 from jaxpm.kernels import fftk, gradient_kernel, laplace_kernel, longrange_kernel
 
 import numpy as np
+
+from hpmtable2 import *
 
 # this needs to be jaxed
 from scipy.interpolate import RegularGridInterpolator
@@ -221,7 +223,6 @@ def HPM_GPmodel(rho,psi,logMmin=8,logMmax=16,NM=100,rmin=0.1,rmax=4,Nr=100):
     P   : float, arr
      Pressure in units of ????
     """
-    from hpmtable2 import *
     
     # First construct a table to map M/r -> rho/psi
     batched_r  = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
@@ -313,7 +314,7 @@ DM_mass = []
 Temperature = []
 Pressure = []
 
-intpT, intpP = make_HPM_table_interpolator()
+#intpT, intpP = make_HPM_table_interpolator()
 
 for i in range(n_lens):
 
@@ -337,13 +338,14 @@ for i in range(n_lens):
 
     F_rhom = np.fft.fftshift(np.fft.fftn(total_mass_egd))
     kg = create_kgrid(total_mass_egd.shape[0], total_mass_egd.shape[1], total_mass_egd.shape[2], lx=box_size[0], ly=box_size[1], lz=box_size[2])
+    kg=kg.at[kg==0].set(jnp.inf)
     F_fscalar = 2*np.pi**2*G*F_rhom/kg # m^3/kg/s^2 (Msun/h)/(Mpc/h)^2  
     R_fscalar = np.fft.ifftn(np.fft.ifftshift(F_fscalar)) 
 
     # we want km/s/Gyr [L/T^2] -- in the paper
     R_fscalar -= np.min(R_fscalar.real)  
     R_fscalar_new = R_fscalar * (10**(-3))**3 * (1.989* 10**30 / h)  * 3.1536 * 10**16 / (3.086*10**19/h)**2 
-
+    #pdb.set_trace()
     print("fscalar", (R_fscalar_new.real).flatten())
     print("rho/rho_m", (total_mass_egd/np.mean(total_mass_egd)).flatten())
     # make jax
