@@ -1,4 +1,8 @@
 
+from time import time
+
+start = time()
+
 import jax
 import jax.numpy as jnp
 import jax_cosmo as jc
@@ -11,6 +15,8 @@ from jaxpm.kernels import fftk, gradient_kernel, laplace_kernel, longrange_kerne
 from jax.scipy.ndimage import map_coordinates
 
 import tensorflow_probability as tfp
+from tensorflow.python.ops.numpy_ops import np_config
+np_config.enable_numpy_behavior()
 
 from hpmtable2 import *
 
@@ -19,16 +25,72 @@ import pdb
 
 # this needs to be jaxed
 from scipy.interpolate import RegularGridInterpolator
+import astropy.units as u
 
 from jax import config
 config.update("jax_enable_x64", True)
+
+# this can be a different code
+import cProfile
+import pstats
+from functools import wraps
+
+
+def profile(output_file=None, sort_by='cumulative', lines_to_print=None, strip_dirs=False):
+    """A time profiler decorator.
+    Inspired by and modified the profile decorator of Giampaolo Rodola:
+    http://code.activestate.com/recipes/577817-profile-decorator/
+    Args:
+        output_file: str or None. Default is None
+            Path of the output file. If only name of the file is given, it's
+            saved in the current directory.
+            If it's None, the name of the decorated function is used.
+        sort_by: str or SortKey enum or tuple/list of str/SortKey enum
+            Sorting criteria for the Stats object.
+            For a list of valid string and SortKey refer to:
+            https://docs.python.org/3/library/profile.html#pstats.Stats.sort_stats
+        lines_to_print: int or None
+            Number of lines to print. Default (None) is for all the lines.
+            This is useful in reducing the size of the printout, especially
+            that sorting by 'cumulative', the time consuming operations
+            are printed toward the top of the file.
+        strip_dirs: bool
+            Whether to remove the leading path info from file names.
+            This is also useful in reducing the size of the printout
+    Returns:
+        Profile of the decorated function
+    """
+
+    def inner(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            _output_file = output_file or func.__name__ + '.prof'
+            pr = cProfile.Profile()
+            pr.enable()
+            retval = func(*args, **kwargs)
+            pr.disable()
+            pr.dump_stats(_output_file)
+
+            with open(_output_file, 'w') as f:
+                ps = pstats.Stats(pr, stream=f)
+                if strip_dirs:
+                    ps.strip_dirs()
+                if isinstance(sort_by, (tuple, list)):
+                    ps.sort_stats(*sort_by)
+                else:
+                    ps.sort_stats(sort_by)
+                ps.print_stats(lines_to_print)
+            return retval
+
+        return wrapper
+
+    return inner
 
 ### input parameters (free)
 # currently this is just controlling the EDG part, later we want to also connect it to the HPM table
 
 params_camels_optimized = jnp.array([0.93629056,2.0582693,0.46008348])
 params_camels_optimized_extreme = jnp.array([100.93629056,100.0582693,0.46008348])
-
 
 ### input parameters (fixed)
 
@@ -78,10 +140,9 @@ icm['gamma']  = 0.3081
 icm['alpha']  = 1.0510
 icm['beta']   = 5.4905
 
+seed = 300
 
-seed = 100
 
-import astropy.units as u
 xgrid, ygrid = np.meshgrid(np.linspace(0, field_size, field_npix, endpoint=False), # range of X coordinates
                            np.linspace(0, field_size, field_npix, endpoint=False)) # range of Y coordinates
 
@@ -92,6 +153,8 @@ coords2 = coords.reshape([2, -1]).T.to(u.rad)
 #from functools import partial
 #@partial(jax.jit, static_argnums=[2])
 
+@profile(lines_to_print=5, output_file='log1.txt')
+@jax.jit
 def create_nbody(cosmo, cosmo2):
 
     # Retrieve the scale factor corresponding to these distances
@@ -168,13 +231,15 @@ def egd_correction(delta, pos, params):
    
     return dpos_egd
 
+# @jax.jit
 def gaussian_kernel(kvec, k_smooth):
-  """
-  Computes a gaussian kernel
-  """
-  kk = sum(ki**2 for ki in kvec)
-  return jnp.exp(-0.5 * kk / k_smooth**2)
+    """
+    Computes a gaussian kernel
+    """
+    kk = sum(ki**2 for ki in kvec)
+    return jnp.exp(-0.5 * kk / k_smooth**2)
 
+# @jax.jit
 def create_kgrid(nx, ny, nz, lx, ly, lz):
     """
     Create a 3D k grid for Fourier space calculations
@@ -232,7 +297,7 @@ def make_HPM_table_interpolator():
     return intpT, intpP
 
 # @jax.jit
-def HPM_GPmodel(rho,psi,a, logMmin=8,logMmax=16,NM=50,rmin=0.1,rmax=4,Nr=50):
+def HPM_GPmodel(rho,psi,a, logMmin=8,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=50):
     """Takes rho and psi and extracts the inverse mapping via
      HPM table to predict the value of T & P.
 
@@ -259,7 +324,7 @@ def HPM_GPmodel(rho,psi,a, logMmin=8,logMmax=16,NM=50,rmin=0.1,rmax=4,Nr=50):
     m_grid     = jnp.logspace(logMmin,logMmax,NM) # Msun/h
     r_grid     = jnp.linspace(rmin,rmax,Nr)# unitless, to be multiplied by R200c
     res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten());del batched_Mr
-    tabM,tabrx,_,_,tabrho,tabpsi,tabT,tabP = res
+    M,rx,_,_,rho,psi,T,P = res
     del res
 
     # Use GP to make an interpolate to apply a reverse mapping
@@ -271,90 +336,26 @@ def HPM_GPmodel(rho,psi,a, logMmin=8,logMmax=16,NM=50,rmin=0.1,rmax=4,Nr=50):
     kern         = psd_kernels.ExponentiatedQuadratic()
 
     model_T = tfd.GaussianProcessRegressionModel( kern,
-                                                  index_points=index_points,
-                                                  observation_index_points=jnp.stack([np.log10(tabrho).flatten(), np.log10(tabpsi).flatten()], axis=1),
-                                                  observations=np.log10(tabT).flatten(),
-                                                 )
+                      index_points=index_points,
+                      observation_index_points=jnp.stack([np.log10(rho).flatten(), np.log10(psi).flatten()], axis=1),
+                      observations=np.log10(T).flatten(),
+                     )
 
     model_P = tfd.GaussianProcessRegressionModel( kern,
-                                                  index_points=index_points,
-                                                  observation_index_points=jnp.stack([np.log10(tabrho).flatten(), np.log10(tabpsi).flatten()], axis=1),
-                                                  observations=np.log10(tabP).flatten(),
-                                                )
+                      index_points=index_points,
+                      observation_index_points=jnp.stack([np.log10(rho).flatten(), np.log10(psi).flatten()], axis=1),
+                      observations=np.log10(P).flatten(),
+                     )
     return 10**model_T.mean(), 10**model_P.mean()
 
 
+@profile(lines_to_print=5, output_file='log2.txt')
+#@jax.jit
+def particles_to_DeltaTP_mesh(res, i):
 
-
-# need to write an equivalent for tSZ
-def tSZ_Born(cosmo,
-            pressure_planes,
-            coords,
-            z_source):
-  """
-  Compute the Born tSZ
-  Args:
-    cosmo: `Cosmology`, cosmology object.
-    density_planes: list of dictionaries (r, a, density_plane, dx, dz), lens planes to use 
-    coords: a 3-D array of angular coordinates in radians of N points with shape [batch, N, 2].
-    z_source: 1-D `Tensor` of source redshifts with shape [Nz] .
-    name: `string`, name of the operation.
-  Returns:
-    `Tensor` of shape [batch_size, N, Nz], of convergence values.
-  """
-
-
-  # /1e9*lensplane_width
-  #   pressure_plane = pressure_plane*sigT/(3.0886e22)**2
-  #   pressure_plane = pressure_plane/me*1.99e30
-  #   pressure_plane = pressure_plane*(1000)**2/c**2*h
-
-  # Compute constant prefactor:
-  constant_factor = 1./1e9 * sigT/(3.0886e22)**2 /me*1.99e30 *(1000)**2/c**2*h 
-
-  # Compute comoving distance of source galaxies
-  r_s = jax_cosmo.background.radial_comoving_distance(cosmo, 1 / (1 + z_source))
-
-  tsz = 0
-  for entry in pressure_planes:
-    r = entry['r']; a = entry['a']; p = entry['plane']
-    dx = entry['dx']; dz = entry['dz']
-    # Normalize density planes
-    normalization = dz * r / a
-    p = p * constant_factor * density_normalization
-
-    # Interpolate at the density plane coordinates
-    im = map_coordinates(p, 
-                         coords * r / dx - 0.5, 
-                         order=1, mode="wrap")
-
-    tsz += im * jnp.clip(1. - (r / r_s), 0, 1000).reshape([-1, 1, 1])
-
-  return tsz
-
-### main part of code ###############################
-
-cosmo = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
-cosmo2 = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
-
-res, a_center = create_nbody(cosmo, cosmo2)
-print('end of N body creation')
-
-Msun_per_particle, Rho_m_mean = calculat_Msun_per_particle(res[0], a_center, cosmo)
-print('end of calculation of M and rho')
-
-# first loop to get all the 3D quantities
-Total_mass = []
-Total_delta = []
-DM_mass = []
-Temperature = []
-Pressure = []
-
-intpT, intpP = make_HPM_table_interpolator()
-
-for i in range(n_lens):
-
-    print('Lens redshift', i)
+    """
+    input particle list, output 3D mesh of deltaa, T and P
+    """
 
     Nparticles = len(res[0][i])
     inds = jax.random.shuffle(jax.random.PRNGKey(seed), jnp.arange(0,Nparticles-1))
@@ -384,27 +385,96 @@ for i in range(n_lens):
     R_fscalar -= jnp.min(R_fscalar.real)  
     R_fscalar_new = R_fscalar * (10**(-3))**3 * (1.989* 10**30 / h)  * 3.1536 * 10**16 / (3.086*10**19/h)**2 
 
-    # Tf = intpT( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
-    # Pf = intpP( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
+    Tf = intpT( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
+    Pf = intpP( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
     
     # pdb.set_trace()
 
     # here we want to interpolate back to the particles, run the HPM tables from the particles, and later project it onto 2D 
-    Tf,Pf = HPM_GPmodel((total_mass_egd/np.mean(total_mass_egd)).flatten(), (R_fscalar_new.real).flatten(), a_center[i])
-    Tf = Tf.reshape((nc[0],nc[1],nc[2]))
-    Pf = Pf.reshape((nc[0],nc[1],nc[2]))
+    # Tf,Pf = HPM_GPmodel((total_mass_egd/np.mean(total_mass_egd)).flatten(), (R_fscalar_new.real).flatten(), a_center[i])
+    # Tf = Tf.reshape((nc[0],nc[1],nc[2]))
+    # Pf = Pf.reshape((nc[0],nc[1],nc[2]))
 
-    Total_mass.append(total_mass_egd)
-    Total_delta.append(total_delta_egd)
-    DM_mass.append(egd_rho_dm * Msun_per_particle[i])
-    Temperature.append(Tf)
-    Pressure.append(Pf)
+    return total_delta_egd, Tf, Pf
+
+# need to write an equivalent for tSZ
+@profile(lines_to_print=5, output_file='log3.txt')
+@jax.jit
+def tsz_Born(cosmo,
+            pressure_planes,
+            coords,
+            z_source):
+    """
+    Compute the Born tSZ
+    Args:
+      cosmo: `Cosmology`, cosmology object.
+      density_planes: list of dictionaries (r, a, density_plane, dx, dz), lens planes to use 
+      coords: a 3-D array of angular coordinates in radians of N points with shape [batch, N, 2].
+      z_source: 1-D `Tensor` of source redshifts with shape [Nz] .
+      name: `string`, name of the operation.
+    Returns:
+      `Tensor` of shape [batch_size, N, Nz], of convergence values.
+    """
+
+    # Compute constant prefactor:
+    constant_factor = 1./1e9 * sigT/(3.0886e22)**2 /me*1.99e30 *(1000)**2/c**2*h 
+
+    tsz = 0
+    for entry in pressure_planes:
+      r = entry['r']; a = entry['a']; p = entry['plane']
+      dx = entry['dx']; dz = entry['dz']
+      # Normalize density planes
+      normalization = dz * r / a
+      p = p * constant_factor * normalization
+
+      # Interpolate at the density plane coordinates
+      im = map_coordinates(p, 
+                         coords * r / dx - 0.5, 
+                         order=1, mode="wrap")
+
+    tsz += im 
+
+    return tsz
+
+
+
+### main part of code ###############################
+
+cosmo = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
+cosmo2 = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
+
+res, a_center = create_nbody(cosmo, cosmo2)
+
+Msun_per_particle, Rho_m_mean = calculat_Msun_per_particle(res[0], a_center, cosmo)
+
+# first loop to get all the 3D quantities
+#Total_mass = []
+#DM_mass = []
+
+Total_delta = []
+Temperature = []
+Pressure = []
+
+intpT, intpP = make_HPM_table_interpolator()
+
+for i in range(n_lens):
+
+    print('Lens bin', i)
+
+    Meshes = particles_to_DeltaTP_mesh(res, i)
+
+    # Total_mass.append(total_mass_egd)
+    # DM_mass.append(egd_rho_dm * Msun_per_particle[i])
+    Total_delta.append(Meshes[0])
+    Temperature.append(Meshes[1])
+    Pressure.append(Meshes[2])    
 
 # print("total mass", Total_mass[:3])
 # print("total delta", Total_delta[:3])
 # print("DM mass", DM_mass[:3])
-print("temperature", Temperature[:3])
-print("pressure", Pressure[:3])
+# print("temperature", Temperature[:3])
+# print("pressure", Pressure[:3])
+
 
 # do first level of integrating, into slabs of density and pressure 
 lensplanes = []
@@ -428,16 +498,15 @@ for i in range(n_lens):
                       'dz':lensplane_width})
     
     # replace with proper coordiate transform
-    pressureplane.append(pressure_plane)
+    # pressureplane.append(pressure_plane)
 
-    # pressureplane.append({'r': r_center[i],
-    #                   'a': a_center[::-1],
-    #                   'plane': pressure_plane,
-    #                   'dx':box_size[0]/nc[0],
-    #                   'dz':lensplane_width})
+    pressureplane.append({'r': r_center[i],
+                      'a': a_center[::-1],
+                      'plane': pressure_plane,
+                      'dx':box_size[0]/nc[0],
+                      'dz':lensplane_width})
 
 # now do integrated quantities: kappa planes, pressure planes
-
 kappa = convergence_Born(cosmo,
                       lensplanes,
                       coords=jnp.array(coords2).T.reshape(2,field_npix,field_npix),
@@ -445,19 +514,21 @@ kappa = convergence_Born(cosmo,
 
 
 # really we should write a function similar to convergence_Born here
-# y = tsz_Born(cosmo,
-#              lensplanes,
-#              coords=jnp.array(coords2).T.reshape(2,field_npix,field_npix),
-#              z_source=z_source)
+y = tsz_Born(cosmo,
+             lensplanes,
+             coords=jnp.array(coords2).T.reshape(2,field_npix,field_npix),
+             z_source=z_source)
 
-y = []
-for i in range(n_lens):
-    y.append(np.sum(np.array(pressureplane)[:(i+1), :,:], axis=0))
+# y = []
+# for i in range(n_lens):
+#     y.append(np.sum(np.array(pressureplane)[:(i+1), :,:], axis=0))
 
-print("kappa", kappa[:3])
-print("y", y[:3])
+# print("kappa", kappa[:3])
+# print("y", y[:3])
 
 np.savez('kappa.npz', kappa=kappa, z=z_source)
 np.savez('y.npz', y=y, z=1./a_center-1)
 
+end = time()
 
+print(f'It took {end - start} seconds!')
