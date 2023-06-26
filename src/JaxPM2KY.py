@@ -1,18 +1,19 @@
-import pdb
+
 import jax
 import jax.numpy as jnp
 import jax_cosmo as jc
-import tensorflow_probability as tfp
 
 from jax.experimental.ode import odeint
 from jaxpm.painting import cic_paint, cic_paint_2d, cic_read, compensate_cic
 from jaxpm.pm import linear_field, lpt, make_ode_fn
 from jaxpm.lensing import density_plane, convergence_Born
 from jaxpm.kernels import fftk, gradient_kernel, laplace_kernel, longrange_kernel
-
-import numpy as np
+from jax.scipy.ndimage import map_coordinates
 
 from hpmtable2 import *
+
+import numpy as np
+import pdb
 
 # this needs to be jaxed
 from scipy.interpolate import RegularGridInterpolator
@@ -58,7 +59,6 @@ G = G*3.15e16            # (km)(Mpc^2)/Msun/s/Gyr
 sigT  = 6.65e-29 # m^2
 me    = 9.11e-31 # kg
 c     = 3e8      # m^2/s^2
-dl    = 25/128   # Mpc/h
 
 seed = 100
 
@@ -205,6 +205,7 @@ def make_HPM_table_interpolator():
     intpP = RegularGridInterpolator((psi,drho), Pt, bounds_error=False, fill_value=0)
     return intpT, intpP
 
+
 def HPM_GPmodel(rho,psi,logMmin=8,logMmax=16,NM=100,rmin=0.1,rmax=4,Nr=100):
     """Takes rho and psi and extracts the inverse mapping via
      HPM table to predict the value of T & P.
@@ -255,14 +256,13 @@ def HPM_GPmodel(rho,psi,logMmin=8,logMmax=16,NM=100,rmin=0.1,rmax=4,Nr=100):
 
 
 
-
 # need to write an equivalent for tSZ
-def convergence_Born(cosmo,
-                     density_planes,
-                     coords,
-                     z_source):
+def tSZ_Born(cosmo,
+            pressure_planes,
+            coords,
+            z_source):
   """
-  Compute the Born convergence
+  Compute the Born tSZ
   Args:
     cosmo: `Cosmology`, cosmology object.
     density_planes: list of dictionaries (r, a, density_plane, dx, dz), lens planes to use 
@@ -272,6 +272,13 @@ def convergence_Born(cosmo,
   Returns:
     `Tensor` of shape [batch_size, N, Nz], of convergence values.
   """
+
+
+  # /1e9*lensplane_width
+  #   pressure_plane = pressure_plane*sigT/(3.0886e22)**2
+  #   pressure_plane = pressure_plane/me*1.99e30
+  #   pressure_plane = pressure_plane*(1000)**2/c**2*h
+
   # Compute constant prefactor:
   constant_factor = 3 / 2 * cosmo.Omega_m * (constants.H0 / constants.c)**2
   # Compute comoving distance of source galaxies
@@ -314,7 +321,7 @@ DM_mass = []
 Temperature = []
 Pressure = []
 
-#intpT, intpP = make_HPM_table_interpolator()
+intpT, intpP = make_HPM_table_interpolator()
 
 for i in range(n_lens):
 
@@ -336,19 +343,23 @@ for i in range(n_lens):
     total_mass_egd = total_particles_egd * Msun_per_particle[i]
     total_delta_egd = total_mass_egd/total_mass_egd.mean() - 1
 
-    F_rhom = np.fft.fftshift(np.fft.fftn(total_mass_egd))
+    F_rhom = jnp.fft.fftshift(jnp.fft.fftn(total_mass_egd))
     kg = create_kgrid(total_mass_egd.shape[0], total_mass_egd.shape[1], total_mass_egd.shape[2], lx=box_size[0], ly=box_size[1], lz=box_size[2])
-    kg=kg.at[kg==0].set(jnp.inf)
-    F_fscalar = 2*np.pi**2*G*F_rhom/kg # m^3/kg/s^2 (Msun/h)/(Mpc/h)^2  
-    R_fscalar = np.fft.ifftn(np.fft.ifftshift(F_fscalar)) 
+
+    kg = kg.at[kg==0].set(jnp.inf)
+    F_fscalar = 2*jnp.pi**2*G*F_rhom/kg # m^3/kg/s^2 (Msun/h)/(Mpc/h)^2  
+    R_fscalar = jnp.fft.ifftn(jnp.fft.ifftshift(F_fscalar)) 
+    print("R_fscalar1", R_fscalar)
 
     # we want km/s/Gyr [L/T^2] -- in the paper
-    R_fscalar -= np.min(R_fscalar.real)  
+    R_fscalar -= jnp.min(R_fscalar.real)  
+    print("R_fscalar2", R_fscalar)
+
     R_fscalar_new = R_fscalar * (10**(-3))**3 * (1.989* 10**30 / h)  * 3.1536 * 10**16 / (3.086*10**19/h)**2 
-    #pdb.set_trace()
+    print("R_fscalar_new", R_fscalar_new)
+
     print("fscalar", (R_fscalar_new.real).flatten())
     print("rho/rho_m", (total_mass_egd/np.mean(total_mass_egd)).flatten())
-    # make jax
     #Tf = intpT( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
     #Pf = intpP( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
     Tf,Pf = HPM_GPmodel((total_mass_egd/np.mean(total_mass_egd)).flatten(), (R_fscalar_new.real).flatten() )
@@ -376,10 +387,7 @@ for i in range(n_lens):
     layer_min = int(center-0.5*width) 
     # not sure if convergence_Born takes in delta*dl or delta
     density_plane = Total_delta[i][:,:, int(center-0.5*width):int(center+0.5*width)].sum(axis=2)
-    pressure_plane = Pressure[i][:,:, int(center-0.5*width):int(center+0.5*width)].sum(axis=2)/1e9*lensplane_width
-    pressure_plane = pressure_plane*sigT/(3.0886e22)**2
-    pressure_plane = pressure_plane/me*1.99e30
-    pressure_plane = pressure_plane*(1000)**2/c**2*h
+    pressure_plane = Pressure[i][:,:, int(center-0.5*width):int(center+0.5*width)].sum(axis=2)
 
     lensplanes.append({'r': r_center[i],
                       'a': a_center[::-1],
@@ -387,11 +395,15 @@ for i in range(n_lens):
                       'dx':box_size[0]/nc[0],
                       'dz':lensplane_width})
     
-    pressureplane.append(pressure_plane)
+    pressureplane.append({'r': r_center[i],
+                      'a': a_center[::-1],
+                      'plane': pressure_plane,
+                      'dx':box_size[0]/nc[0],
+                      'dz':lensplane_width})
 
 # now do integrated quantities: kappa planes, pressure planes
 
-kappa = convergence_Born(cosmology,
+kappa = convergence_Born(cosmo,
                       lensplanes,
                       coords=jnp.array(c).T.reshape(2,field_npix,field_npix),
                       z_source=z_source)
