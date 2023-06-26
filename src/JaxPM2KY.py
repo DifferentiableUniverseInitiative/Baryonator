@@ -16,7 +16,6 @@ from hpmtable2 import *
 
 import numpy as np
 import pdb
-import time
 
 # this needs to be jaxed
 from scipy.interpolate import RegularGridInterpolator
@@ -33,13 +32,15 @@ params_camels_optimized_extreme = jnp.array([100.93629056,100.0582693,0.46008348
 
 ### input parameters (fixed)
 
-box_size = [200.,200.,400.]    #0 Transverse comoving size of the simulation volume Mpc/h
-nc = [64, 64, 128]             #0 Number of transverse voxels in the simulation volume
+box_size = [200.,200.,4000.]    #[200.,200.,4000.] Transverse comoving size of the simulation volume Mpc/h
+#nc = [32, 32, 64]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
+nc = [64, 64, 1280]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
+
 lensplane_width = 102.5         # Width of each lensplane
 n_lens = int(box_size[-1] // lensplane_width)
 field_size = 5                  # Size of the lensing field in degrees
-field_npix = 128                # Number of pixels in the lensing field
-z_source = jnp.linspace(0,2)    # Source planes
+field_npix = 64                # Number of pixels in the lensing field
+z_source = jnp.linspace(0,2.5,39)    # Source planes -- this needs to change
 r = jnp.linspace(0., box_size[-1], n_lens+1)
 r_center = 0.5*(r[1:] + r[:-1])
 
@@ -79,6 +80,13 @@ icm['beta']   = 5.4905
 
 
 seed = 100
+
+import astropy.units as u
+xgrid, ygrid = np.meshgrid(np.linspace(0, field_size, field_npix, endpoint=False), # range of X coordinates
+                           np.linspace(0, field_size, field_npix, endpoint=False)) # range of Y coordinates
+
+coords = np.stack([xgrid, ygrid], axis=0)*u.deg
+coords2 = coords.reshape([2, -1]).T.to(u.rad)
 
 # if we want to ignore some dynamical parameters in the functions
 #from functools import partial
@@ -223,7 +231,7 @@ def make_HPM_table_interpolator():
     intpP = RegularGridInterpolator((psi,drho), Pt, bounds_error=False, fill_value=0)
     return intpT, intpP
 
-
+# @jax.jit
 def HPM_GPmodel(rho,psi,a, logMmin=8,logMmax=16,NM=50,rmin=0.1,rmax=4,Nr=50):
     """Takes rho and psi and extracts the inverse mapping via
      HPM table to predict the value of T & P.
@@ -277,6 +285,7 @@ def HPM_GPmodel(rho,psi,a, logMmin=8,logMmax=16,NM=50,rmin=0.1,rmax=4,Nr=50):
 
 
 
+
 # need to write an equivalent for tSZ
 def tSZ_Born(cosmo,
             pressure_planes,
@@ -301,26 +310,27 @@ def tSZ_Born(cosmo,
   #   pressure_plane = pressure_plane*(1000)**2/c**2*h
 
   # Compute constant prefactor:
-  constant_factor = 3 / 2 * cosmo.Omega_m * (constants.H0 / constants.c)**2
+  constant_factor = 1./1e9 * sigT/(3.0886e22)**2 /me*1.99e30 *(1000)**2/c**2*h 
+
   # Compute comoving distance of source galaxies
   r_s = jax_cosmo.background.radial_comoving_distance(cosmo, 1 / (1 + z_source))
 
-  convergence = 0
-  for entry in density_planes:
+  tsz = 0
+  for entry in pressure_planes:
     r = entry['r']; a = entry['a']; p = entry['plane']
     dx = entry['dx']; dz = entry['dz']
     # Normalize density planes
-    density_normalization = dz * r / a
-    p = (p - p.mean()) * constant_factor * density_normalization
+    normalization = dz * r / a
+    p = p * constant_factor * density_normalization
 
     # Interpolate at the density plane coordinates
     im = map_coordinates(p, 
                          coords * r / dx - 0.5, 
                          order=1, mode="wrap")
 
-    convergence += im * jnp.clip(1. - (r / r_s), 0, 1000).reshape([-1, 1, 1])
+    tsz += im * jnp.clip(1. - (r / r_s), 0, 1000).reshape([-1, 1, 1])
 
-  return convergence
+  return tsz
 
 ### main part of code ###############################
 
@@ -329,11 +339,9 @@ cosmo2 = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
 
 res, a_center = create_nbody(cosmo, cosmo2)
 print('end of N body creation')
-#print(res)
 
 Msun_per_particle, Rho_m_mean = calculat_Msun_per_particle(res[0], a_center, cosmo)
 print('end of calculation of M and rho')
-#print(Msun_per_particle, Rho_m_mean)
 
 # first loop to get all the 3D quantities
 Total_mass = []
@@ -342,7 +350,7 @@ DM_mass = []
 Temperature = []
 Pressure = []
 
-#intpT, intpP = make_HPM_table_interpolator()
+intpT, intpP = make_HPM_table_interpolator()
 
 for i in range(n_lens):
 
@@ -354,6 +362,7 @@ for i in range(n_lens):
     egd_pos_gas = res[0][i][inds[:split]]
     egd_pos_dm  = res[0][i][inds[split:]]
 
+    # may be able to remove some of these that are not used later
     total_mass_dmo = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), res[0][i])
     total_delta_dmo = total_mass_dmo/total_mass_dmo.mean() - 1
     egd_rho_dm = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), egd_pos_dm) # this is still in number of particles
@@ -375,14 +384,16 @@ for i in range(n_lens):
     R_fscalar -= jnp.min(R_fscalar.real)  
     R_fscalar_new = R_fscalar * (10**(-3))**3 * (1.989* 10**30 / h)  * 3.1536 * 10**16 / (3.086*10**19/h)**2 
 
-    print("fscalar", (R_fscalar_new.real).flatten())
-    print("rho/rho_m", (total_mass_egd/np.mean(total_mass_egd)).flatten())
-    #Tf = intpT( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
-    #Pf = intpP( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
-    t0 = time.time()
+    # Tf = intpT( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
+    # Pf = intpP( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
+    
+    # pdb.set_trace()
+
+    # here we want to interpolate back to the particles, run the HPM tables from the particles, and later project it onto 2D 
     Tf,Pf = HPM_GPmodel((total_mass_egd/np.mean(total_mass_egd)).flatten(), (R_fscalar_new.real).flatten(), a_center[i])
-    t1 = time.time()
-    print( t1-t0)
+    Tf = Tf.reshape((nc[0],nc[1],nc[2]))
+    Pf = Pf.reshape((nc[0],nc[1],nc[2]))
+
     Total_mass.append(total_mass_egd)
     Total_delta.append(total_delta_egd)
     DM_mass.append(egd_rho_dm * Msun_per_particle[i])
@@ -404,16 +415,19 @@ for i in range(n_lens):
     width = lensplane_width/box_size[-1]*nc[-1]
     center = (i+0.5)*lensplane_width/box_size[-1]*nc[-1]
     layer_min = int(center-0.5*width) 
-    # not sure if convergence_Born takes in delta*dl or delta
+    
+    # replace this by the density plane function for both
     density_plane = Total_delta[i][:,:, int(center-0.5*width):int(center+0.5*width)].sum(axis=2)
     pressure_plane = Pressure[i][:,:, int(center-0.5*width):int(center+0.5*width)].sum(axis=2)
+    # pdb.set_trace()
 
     lensplanes.append({'r': r_center[i],
-                      'a': a_center[::-1],
+                      'a': a_center[::-1][i],
                       'plane': density_plane,
                       'dx':box_size[0]/nc[0],
                       'dz':lensplane_width})
     
+    # replace with proper coordiate transform
     pressureplane.append(pressure_plane)
 
     # pressureplane.append({'r': r_center[i],
@@ -426,14 +440,24 @@ for i in range(n_lens):
 
 kappa = convergence_Born(cosmo,
                       lensplanes,
-                      coords=jnp.array(c).T.reshape(2,field_npix,field_npix),
+                      coords=jnp.array(coords2).T.reshape(2,field_npix,field_npix),
                       z_source=z_source)
 
+
 # really we should write a function similar to convergence_Born here
-y = [np.sum(pressureplane[:,:,:i+1]) for i in range(n_lens)]
+# y = tsz_Born(cosmo,
+#              lensplanes,
+#              coords=jnp.array(coords2).T.reshape(2,field_npix,field_npix),
+#              z_source=z_source)
+
+y = []
+for i in range(n_lens):
+    y.append(np.sum(np.array(pressureplane)[:(i+1), :,:], axis=0))
 
 print("kappa", kappa[:3])
-print("t", y[:3])
+print("y", y[:3])
 
-np.savez('kappa.npz', kappa=kappa)
-np.savez('y.npz', y=y)
+np.savez('kappa.npz', kappa=kappa, z=z_source)
+np.savez('y.npz', y=y, z=1./a_center-1)
+
+
