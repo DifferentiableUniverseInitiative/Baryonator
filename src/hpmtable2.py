@@ -166,6 +166,7 @@ def M500c_from_M200c(cosmo, M200c, R200c, c200c, rho500c):
 
     M500c_from_M200c = Mi
     print("NEW M500c_from_M200c:",M500c_from_M200c)
+
     #jnp.interp(x,R)
     #pdb.set_trace()
 
@@ -610,11 +611,38 @@ table_halo(cosmo,a,icm,M,r)
 
 
 print('------------------table_icm-------------------')
+# Compute grid using jitted function
 batched_r  = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
 batched_Mr = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
-m_grid     = jnp.logspace(12,14)
-r_grid     = jnp.linspace(0.1,2) #jnp.meshgrid(jnp.logspace(12,14),jnp.linspace(0.1,2))
+m_grid     = jnp.logspace(8,15)# Msun/h
+r_grid     = jnp.linspace(0.1,4)# unitless, to be multiplied by R200c 
 res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
+
+M,rx,s,x,rho,psi,T,P = res 
+
+import tensorflow_probability as tfp; tfp = tfp.substrates.jax
+tfb = tfp.bijectors
+tfd = tfp.distributions
+psd_kernels = tfp.math.psd_kernels
+
+
+index_points = jnp.array([1e-25, 1e-7]).reshape([-1,2])
+
+model_M = tfd.GaussianProcessRegressionModel( psd_kernels.ExponentiatedQuadratic(),
+                             index_points=index_points,
+                             observation_index_points=jnp.stack([rho.flatten(), psi.flatten()], axis=-1),
+                             observations=M.flatten(),
+                            )
+
+model_r = tfd.GaussianProcessRegressionModel( psd_kernels.ExponentiatedQuadratic(),
+                             index_points=index_points,
+                             observation_index_points=jnp.stack([rho.flatten(), psi.flatten()], axis=-1),
+                             observations=rx.flatten(),
+                            )
+
+print('GPmodel', model_M.mean(), model_r.mean())
+
+print('table', table_halo(cosmo,a,icm, 2.20931786e+13,1.04999627 )[4:6])
 #print('------------------table_icm-------------------')
 #rho = 1e-2
 #psi = 3.6779604e-06
