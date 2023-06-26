@@ -259,7 +259,7 @@ def HPM_GPmodel(rho,psi,a, logMmin=8,logMmax=16,NM=50,rmin=0.1,rmax=4,Nr=50):
     m_grid     = jnp.logspace(logMmin,logMmax,NM) # Msun/h
     r_grid     = jnp.linspace(rmin,rmax,Nr)# unitless, to be multiplied by R200c
     res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten());del batched_Mr
-    M,rx,_,_,rho,psi,T,P = res
+    tabM,tabrx,_,_,tabrho,tabpsi,tabT,tabP = res
     del res
 
     # Use GP to make an interpolate to apply a reverse mapping
@@ -272,14 +272,14 @@ def HPM_GPmodel(rho,psi,a, logMmin=8,logMmax=16,NM=50,rmin=0.1,rmax=4,Nr=50):
 
     model_T = tfd.GaussianProcessRegressionModel( kern,
                                                   index_points=index_points,
-                                                  observation_index_points=jnp.stack([np.log10(rho).flatten(), np.log10(psi).flatten()], axis=1),
-                                                  observations=np.log10(T).flatten(),
+                                                  observation_index_points=jnp.stack([np.log10(tabrho).flatten(), np.log10(tabpsi).flatten()], axis=1),
+                                                  observations=np.log10(tabT).flatten(),
                                                  )
 
     model_P = tfd.GaussianProcessRegressionModel( kern,
                                                   index_points=index_points,
-                                                  observation_index_points=jnp.stack([np.log10(rho).flatten(), np.log10(psi).flatten()], axis=1),
-                                                  observations=np.log10(P).flatten(),
+                                                  observation_index_points=jnp.stack([np.log10(tabrho).flatten(), np.log10(tabpsi).flatten()], axis=1),
+                                                  observations=np.log10(tabP).flatten(),
                                                 )
     return 10**model_T.mean(), 10**model_P.mean()
 
