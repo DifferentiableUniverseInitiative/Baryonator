@@ -588,63 +588,65 @@ def table_icm(cosmo,a,icm,rho,psi):
     return rho,psi,jnp.mean(M[idx]),jnp.mean(r[idx]),jnp.mean(T[idx]),jnp.mean(P[idx])#,jnp.mean(s[idx]),jnp.mean(x[idx]),jnp.mean(vsq[idx]),jnp.mean(Pnth[idx])
 
 
-verbose=False
-mH_cgs   = 1.67223e-24
-cosmo = jc.Planck15()
+if __name__ == "__main__":
+    
+    verbose=False
+    mH_cgs   = 1.67223e-24
+    cosmo = jc.Planck15()
 
-icm = {}
-icm['XH']  = 0.76
-icm['YHe'] = 0.24
-icm['mu']   = mH_cgs/(2*icm['XH'] + 3*icm['YHe']/4)
-icm['mue']  = mH_cgs/(  icm['XH'] + 2*icm['YHe']/4)
-#icm['mue']  = mH_cgs/(  cosmo['XH'] + 4*cosmo['YHe']/4 + 676*icm%Zxry*cosmo%XH)
-icm['p0']     = 8.403
-icm['c500']   = 1.177
-icm['gamma']  = 0.3081
-icm['alpha']  = 1.0510
-icm['beta']   = 5.4905
-
-
-print('------------------table_halo-------------------')
-M=1e14 #M in units of Msun/h
-r=9.999999776482584E-003
-a=0.166666667
-table_halo(cosmo,a,icm,M,r) 
+    icm = {}
+    icm['XH']  = 0.76
+    icm['YHe'] = 0.24
+    icm['mu']   = mH_cgs/(2*icm['XH'] + 3*icm['YHe']/4)
+    icm['mue']  = mH_cgs/(  icm['XH'] + 2*icm['YHe']/4)
+    #icm['mue']  = mH_cgs/(  cosmo['XH'] + 4*cosmo['YHe']/4 + 676*icm%Zxry*cosmo%XH)
+    icm['p0']     = 8.403
+    icm['c500']   = 1.177
+    icm['gamma']  = 0.3081
+    icm['alpha']  = 1.0510
+    icm['beta']   = 5.4905
 
 
-print('------------------table_icm-------------------')
-# Compute grid using jitted function
-batched_r  = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
-batched_Mr = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
-m_grid     = jnp.logspace(8,16,100)# Msun/h
-r_grid     = jnp.linspace(0.1,4,100)# unitless, to be multiplied by R200c 
-res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
+    print('------------------table_halo-------------------')
+    M=1e14 #M in units of Msun/h
+    r=9.999999776482584E-003
+    a=0.166666667
+    table_halo(cosmo,a,icm,M,r) 
 
-M,rx,s,x,rho,psi,T,P = res 
 
-import tensorflow_probability as tfp; tfp = tfp.substrates.jax
-tfb = tfp.bijectors
-tfd = tfp.distributions
-psd_kernels  = tfp.math.psd_kernels
+    print('------------------table_icm-------------------')
+    # Compute grid using jitted function
+    batched_r  = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
+    batched_Mr = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
+    m_grid     = jnp.logspace(8,16,100)# Msun/h
+    r_grid     = jnp.linspace(0.1,4,100)# unitless, to be multiplied by R200c 
+    res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
 
-index_points = jnp.array([1e-25, 1e-7]).reshape([-1,2])
+    M,rx,s,x,rho,psi,T,P = res 
 
-model_M = tfd.GaussianProcessRegressionModel( psd_kernels.ExponentiatedQuadratic(),
-                             index_points=index_points,
-                             observation_index_points=jnp.stack([rho.flatten(), psi.flatten()], axis=-1),
-                             observations=M.flatten(),
-                            )
+    import tensorflow_probability as tfp; tfp = tfp.substrates.jax
+    tfb = tfp.bijectors
+    tfd = tfp.distributions
+    psd_kernels  = tfp.math.psd_kernels
 
-model_r = tfd.GaussianProcessRegressionModel( psd_kernels.ExponentiatedQuadratic(),
-                             index_points=index_points,
-                             observation_index_points=jnp.stack([rho.flatten(), psi.flatten()], axis=-1),
-                             observations=rx.flatten(),
-                            )
+    index_points = jnp.array([1e-25, 1e-7]).reshape([-1,2])
 
-print('GPmodel', model_M.mean(), model_r.mean())
+    model_M = tfd.GaussianProcessRegressionModel( psd_kernels.ExponentiatedQuadratic(),
+                                 index_points=index_points,
+                                 observation_index_points=jnp.stack([rho.flatten(), psi.flatten()], axis=-1),
+                                 observations=M.flatten(),
+                                )
 
-print('table', table_halo(cosmo,a,icm, 2.20931786e+13,1.04999627 )[4:6])# 4->rho 5->psi
-#print('------------------table_icm-------------------')
-#rho = 1e-2
-#psi = 3.6779604e-06
-#table_icm(cosmo,a,icm,rho,psi)
+    model_r = tfd.GaussianProcessRegressionModel( psd_kernels.ExponentiatedQuadratic(),
+                                 index_points=index_points,
+                                 observation_index_points=jnp.stack([rho.flatten(), psi.flatten()], axis=-1),
+                                 observations=rx.flatten(),
+                                )
+
+    print('GPmodel', model_M.mean(), model_r.mean())
+
+    print('table', table_halo(cosmo,a,icm, 2.20931786e+13,1.04999627 )[4:6])# 4->rho 5->psi
+    #print('------------------table_icm-------------------')
+    #rho = 1e-2
+    #psi = 3.6779604e-06
+    #table_icm(cosmo,a,icm,rho,psi)
