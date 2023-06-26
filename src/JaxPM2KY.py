@@ -2,6 +2,7 @@
 import jax
 import jax.numpy as jnp
 import jax_cosmo as jc
+import tensorflow_probability as tfp
 
 from jax.experimental.ode import odeint
 from jaxpm.painting import cic_paint, cic_paint_2d, cic_read, compensate_cic
@@ -201,6 +202,58 @@ def make_HPM_table_interpolator():
     intpT = RegularGridInterpolator((psi,drho), Tt, bounds_error=False, fill_value=0)
     intpP = RegularGridInterpolator((psi,drho), Pt, bounds_error=False, fill_value=0)
     return intpT, intpP
+
+def HPM_GPmodel(rho,psi,logMmin=8,logMmax=16,NM=100,rmin=0.1,rmax=4,Nr=100):
+    """Takes rho and psi and extracts the inverse mapping via
+     HPM table to predict the value of T & P.
+
+    Parameters
+    ----------
+    rho : float, arr
+     density values 
+    psi : float, arr
+     fscalar valaues
+
+    Returns
+    ----------
+    T   : float, arr
+     Temperature in units of K
+    P   : float, arr
+     Pressure in units of ????
+    """
+    from hpmtable2 import *
+    
+    # First construct a table to map M/r -> rho/psi
+    batched_r  = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
+    batched_Mr = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
+    m_grid     = jnp.logspace(logMmin,logMmax,NM) # Msun/h
+    r_grid     = jnp.linspace(rmin,rmax,Nr)# unitless, to be multiplied by R200c
+    res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
+    M,rx,s,x,rho,psi,T,P = res
+
+    # Use GP to make an interpolate to apply a reverse mapping
+    tfb = tfp.bijectors
+    tfd = tfp.distributions
+    psd_kernels  = tfp.math.psd_kernels
+
+    index_points = jnp.array([np.log10(rho), np.log10(psi)]).reshape([-1,2])
+    kern         = psd_kernels.ExponentiatedQuadratic()
+
+    model_T = tfd.GaussianProcessRegressionModel( kern,
+                                                  index_points=index_points,
+                                                  observation_index_points=jnp.stack([np.log10(rho).flatten(), np.log10(psi).flatten()], axis=1),
+                                                  observations=np.log10(T).flatten(),
+                                                 )
+
+    model_P = tfd.GaussianProcessRegressionModel( kern,
+                                                  index_points=index_points,
+                                                  observation_index_points=jnp.stack([np.log10(rho).flatten(), np.log10(psi).flatten()], axis=1),
+                                                  observations=np.log10(P).flatten(),
+                                                )
+    return model_T.mean(), model_P.mean()
+
+
+
 
 # need to write an equivalent for tSZ
 def convergence_Born(cosmo,
