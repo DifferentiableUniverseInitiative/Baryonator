@@ -10,6 +10,8 @@ from jaxpm.lensing import density_plane, convergence_Born
 from jaxpm.kernels import fftk, gradient_kernel, laplace_kernel, longrange_kernel
 from jax.scipy.ndimage import map_coordinates
 
+import tensorflow_probability as tfp
+
 from hpmtable2 import *
 
 import numpy as np
@@ -30,9 +32,9 @@ params_camels_optimized_extreme = jnp.array([100.93629056,100.0582693,0.46008348
 
 ### input parameters (fixed)
 
-box_size = [200.,200.,4000.]    # Transverse comoving size of the simulation volume Mpc/h
-nc = [64, 64, 1280]             # Number of transverse voxels in the simulation volume
-lensplane_width = 1002.5         # Width of each lensplane
+box_size = [200.,200.,400.]    #0 Transverse comoving size of the simulation volume Mpc/h
+nc = [64, 64, 128]             #0 Number of transverse voxels in the simulation volume
+lensplane_width = 102.5         # Width of each lensplane
 n_lens = int(box_size[-1] // lensplane_width)
 field_size = 5                  # Size of the lensing field in degrees
 field_npix = 128                # Number of pixels in the lensing field
@@ -59,6 +61,21 @@ G = G*3.15e16            # (km)(Mpc^2)/Msun/s/Gyr
 sigT  = 6.65e-29 # m^2
 me    = 9.11e-31 # kg
 c     = 3e8      # m^2/s^2
+
+mH_cgs   = 1.67223e-24
+
+icm = {}
+icm['XH']  = 0.76
+icm['YHe'] = 0.24
+icm['mu']   = mH_cgs/(2*icm['XH'] + 3*icm['YHe']/4)
+icm['mue']  = mH_cgs/(  icm['XH'] + 2*icm['YHe']/4)
+#icm['mue']  = mH_cgs/(  cosmo['XH'] + 4*cosmo['YHe']/4 + 676*icm%Zxry*cosmo%XH)
+icm['p0']     = 8.403
+icm['c500']   = 1.177
+icm['gamma']  = 0.3081
+icm['alpha']  = 1.0510
+icm['beta']   = 5.4905
+
 
 seed = 100
 
@@ -206,7 +223,7 @@ def make_HPM_table_interpolator():
     return intpT, intpP
 
 
-def HPM_GPmodel(rho,psi,logMmin=8,logMmax=16,NM=100,rmin=0.1,rmax=4,Nr=100):
+def HPM_GPmodel(rho,psi,a, logMmin=8,logMmax=16,NM=100,rmin=0.1,rmax=4,Nr=100):
     """Takes rho and psi and extracts the inverse mapping via
      HPM table to predict the value of T & P.
 
@@ -225,6 +242,8 @@ def HPM_GPmodel(rho,psi,logMmin=8,logMmax=16,NM=100,rmin=0.1,rmax=4,Nr=100):
      Pressure in units of ????
     """
     
+    verbose = False
+
     # First construct a table to map M/r -> rho/psi
     batched_r  = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
     batched_Mr = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
@@ -349,20 +368,16 @@ for i in range(n_lens):
     kg = kg.at[kg==0].set(jnp.inf)
     F_fscalar = 2*jnp.pi**2*G*F_rhom/kg # m^3/kg/s^2 (Msun/h)/(Mpc/h)^2  
     R_fscalar = jnp.fft.ifftn(jnp.fft.ifftshift(F_fscalar)) 
-    print("R_fscalar1", R_fscalar)
 
     # we want km/s/Gyr [L/T^2] -- in the paper
     R_fscalar -= jnp.min(R_fscalar.real)  
-    print("R_fscalar2", R_fscalar)
-
     R_fscalar_new = R_fscalar * (10**(-3))**3 * (1.989* 10**30 / h)  * 3.1536 * 10**16 / (3.086*10**19/h)**2 
-    print("R_fscalar_new", R_fscalar_new)
 
     print("fscalar", (R_fscalar_new.real).flatten())
     print("rho/rho_m", (total_mass_egd/np.mean(total_mass_egd)).flatten())
     #Tf = intpT( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
     #Pf = intpP( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
-    Tf,Pf = HPM_GPmodel((total_mass_egd/np.mean(total_mass_egd)).flatten(), (R_fscalar_new.real).flatten() )
+    Tf,Pf = HPM_GPmodel((total_mass_egd/np.mean(total_mass_egd)).flatten(), (R_fscalar_new.real).flatten(), a_center[i])
 
     Total_mass.append(total_mass_egd)
     Total_delta.append(total_delta_egd)
@@ -395,11 +410,13 @@ for i in range(n_lens):
                       'dx':box_size[0]/nc[0],
                       'dz':lensplane_width})
     
-    pressureplane.append({'r': r_center[i],
-                      'a': a_center[::-1],
-                      'plane': pressure_plane,
-                      'dx':box_size[0]/nc[0],
-                      'dz':lensplane_width})
+    pressureplane.append(pressure_plane)
+
+    # pressureplane.append({'r': r_center[i],
+    #                   'a': a_center[::-1],
+    #                   'plane': pressure_plane,
+    #                   'dx':box_size[0]/nc[0],
+    #                   'dz':lensplane_width})
 
 # now do integrated quantities: kappa planes, pressure planes
 
