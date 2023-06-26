@@ -616,8 +616,8 @@ print('------------------table_icm-------------------')
 # Compute grid using jitted function
 batched_r  = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
 batched_Mr = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
-m_grid     = jnp.logspace(8,15)# Msun/h
-r_grid     = jnp.linspace(0.1,4)# unitless, to be multiplied by R200c 
+m_grid     = jnp.logspace(8,16,100)# Msun/h
+r_grid     = jnp.linspace(0.1,4,100)# unitless, to be multiplied by R200c 
 res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
 
 M,rx,s,x,rho,psi,T,P = res 
