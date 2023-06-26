@@ -37,7 +37,7 @@ def tophat_transform(x):
        
     return tophat_transform
 
-def c200c_nfw(cosmo, M200c,verbose=False):
+def c200c_nfw(cosmo,a, M200c,verbose=False):
     # Local parameters
     kappa,alpha,beta,phi0,phi1,eta0,eta1 = 1.00,1.08,1.77,6.58,1.27,7.28,1.56
 
@@ -374,7 +374,7 @@ def table_halo(cosmo,a,icm,M,rx,verbose=False):
     # this : 8.457399482718055e+23
     # hyper: 8.456419471688975E+023
 
-    c200c   = c200c_nfw(cosmo,M200c) #<---- still room for improvement
+    c200c   = c200c_nfw(cosmo,a,M200c) #<---- still room for improvement
     if verbose: print('c200c',c200c)
     #--------XCHECK----------
     # this : 8.625189
