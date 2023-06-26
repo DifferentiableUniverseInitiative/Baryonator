@@ -50,13 +50,13 @@ def c200c_nfw(cosmo, M200c):
     rho0       = cosmo.Omega_m * jc.constants.rhocrit * 1 # to be changed to proper conversion factor self.cosmo['rhoc_ast']
     M          = M200c * cosmo.h /Msun_cgs #* cosmo.h ----> Mpc/h
     R          = (3*M/(4*jnp.pi*rho0))**(1./3)
-    print("R",R)
+    if verbose: print("R",R)
     #--------XCHECK----------
     # this :  6.540351575457153
     # hyper:  6.53995918296178    
 
     k          = kappa*2*jnp.pi/R
-    print('k',k)
+    if verbose: print('k',k)
     #--------XCHECK----------
     # this :  0.9606800543807782
     # hyper:  0.960737694441404    
@@ -64,7 +64,7 @@ def c200c_nfw(cosmo, M200c):
     #neff_pk_fn = jax.grad(lambda k: jnp.log10(jc.power.linear_matter_power(cosmo, k) )) #####<_---- different answer
     #jc.power.linear_matter_power(cosmo, k)/2/np.pi**2*k**3 <--- need some scaling of k
     n          = neff_pk_fn(cosmo,k) 
-    print('n',n)
+    if verbose: print('n',n)
     #--------XCHECK----------
     # this :  -2.251191462464597
     # hyper:  -2.25120419419956 
@@ -106,7 +106,7 @@ def c200c_nfw(cosmo, M200c):
     #sigmaR = np.sum(dk*pk*W*W*k*k)/(2.0*jnp.pi*jnp.pi)*jc.background.growth_factor(cosmo, np.array([a])).item()
 
     nu         = 1.686/sigmaR
-    print('nu',nu)
+    if verbose: print('nu',nu)
     #pdb.set_trace()
     #--------XCHECK----------
     # this :  8.500356
@@ -165,7 +165,7 @@ def M500c_from_M200c(cosmo, M200c, R200c, c200c, rho500c):
     Mi  = jnp.interp(rho500c,rho[::-1],M[::-1]) # somehow doesnt like decreasing function
 
     M500c_from_M200c = Mi
-    print("NEW M500c_from_M200c:",M500c_from_M200c)
+    if verbose: print("NEW M500c_from_M200c:",M500c_from_M200c)
 
     #jnp.interp(x,R)
     #pdb.set_trace()
@@ -203,7 +203,7 @@ def P500c_gnfw(cosmo,a,icm,M):
     hsq    = 8.5e-5/a**4+cosmo.Omega_m/a**3 + cosmo.Omega_de #in the original code there is also Omega_r/a**4
     
     Hz     = H0_cgs*(cosmo.h)*jnp.sqrt(hsq)
-    print('Hz',Hz)
+    if verbose: print('Hz',Hz)
     #--------XCHECK----------
     # this :  1.7999619e-17
     # hyper:  1.799961888504084E-017  
@@ -211,7 +211,7 @@ def P500c_gnfw(cosmo,a,icm,M):
     hz     = Hz/(H0_cgs*cosmo.h)
     #print('Hz',Hz)
     #print('braket',(H0_cgs*cosmo.h))
-    print('hz',hz)
+    if verbose: print('hz',hz)
     #--------XCHECK----------
     # this :  8.198942
     # hyper:  8.19894261475222  
@@ -219,7 +219,7 @@ def P500c_gnfw(cosmo,a,icm,M):
 
     P500c_gnfw = 1.65*eV2erg*(icm['mue']/icm['mu'])*jnp.power(hz, 8./3) * (M/(3E14*(Msun_cgs/1e24)/h70))**(2./3)*jnp.power(h70, 2)
     #pdb.set_trace()
-    print('P500c_gnfw',P500c_gnfw)
+    if verbose: print('P500c_gnfw',P500c_gnfw)
     #--------XCHECK----------
     # this :  6.770829e-10
     # hyper:  6.770158664810687E-010
@@ -271,19 +271,19 @@ def dPdx_tot(icm,x):
 
 def psi_nfw(x,M,R,c):
     rhos  = (M/1e30)/(4*jnp.pi*(R/1e20)**3)*(c)**3/(jnp.log(1+c) - c/(1+c))*1e-30
-    print('rhos',rhos)
+    if verbose: print('rhos',rhos)
     #--------XCHECK----------
     # this : 1.8115183e-23
     # hyper: 1.807925321299102E-023
 
     rs    = R/c
-    print('rs',rs)
+    if verbose: print('rs',rs)
     #--------XCHECK----------
     # this : 9.8051515e+22
     # hyper: 9.813421148458727E+022
     
     Apsi  = 4*jnp.pi*G_cgs*rhos*rs
-    print('Apsi',Apsi)
+    if verbose: print('Apsi',Apsi)
     #--------XCHECK----------
     # this : 1.4897473e-06
     # hyper:  1.487665285580003E-006
@@ -344,19 +344,19 @@ def table_halo(cosmo,a,icm,M,rx):
 
     #(M,r) -> compute rho,psi etc.
     M200c   = M/cosmo.h*Msun_cgs
-    print("M200c",M200c)
+    if verbose: print("M200c",M200c)
     #--------XCHECK----------
     # this : 2.936226749335696e+47
     # hyper: 2.936226760400337E+047
 
     rho200c = 200*rhocrit_z_cgs(cosmo,a) #rhocrit in cgs units
-    print("rho200c",rho200c) 
+    if verbose: print("rho200c",rho200c) 
     #--------XCHECK----------
     # this : 1.1587519e-25
     # hyper: 1.159160489937735E-025
 
     rho500c = 500*rhocrit_z_cgs(cosmo,a) #rhocrit in cgs units
-    print("rho500c",rho500c) 
+    if verbose: print("rho500c",rho500c) 
     #--------XCHECK----------
     # this : 2.89688e-25
     # hyper: 2.897901224844337E-025
@@ -369,62 +369,62 @@ def table_halo(cosmo,a,icm,M,rx):
     #R200c   = (M200c/1e30/(4*jnp.pi/3*(rho200c*1e30) ))**(1./3)*(1.e30)**(1./3)*(1.e30)**(1./3) # avoid float64
     R200c   = ( (M200c/1e30)/(4*np.pi/3*((rho200c*1e30) ) ))**(1./3) *(1e30)**(1./3)*(1e30)**(1./3) # avoid float64
     #pdb.set_trace()
-    print('R200c',R200c)
+    if verbose: print('R200c',R200c)
     #--------XCHECK----------
     # this : 8.457399482718055e+23
     # hyper: 8.456419471688975E+023
 
     c200c   = c200c_nfw(cosmo,M200c) #<---- still room for improvement
-    print('c200c',c200c)
+    if verbose: print('c200c',c200c)
     #--------XCHECK----------
     # this : 8.625189
     # hyper: 8.61719816540954  
 
     rs      = R200c/c200c
-    print('rs',rs)
+    if verbose: print('rs',rs)
     #--------XCHECK----------
     # this :  9.8051515e+22
     # hyper:  9.813421148458727E+022
 
     #print('bb')
     M500c   = M500c_from_M200c(cosmo,M200c,R200c,c200c,rho500c) # the answer is divided by 1e24
-    print('M500c',M500c)
+    if verbose: print('M500c',M500c)
     #--------XCHECK----------
     # this :  2.2985634e+47
     # hyper:  2.298221906926749E+047
     
     R500c   = (M500c/(4*jnp.pi/3*rho500c*1e30))**(1./3)*(1e24)**(1./3)*(1e30)**(1./3)
-    print('R500c',R500c)
+    if verbose: print('R500c',R500c)
     #--------XCHECK----------
     # this :  5.74291e+23
     # hyper:  5.742142494073986E+023
     
     c500c   = R500c/rs
-    print('c500c',c500c)
+    if verbose: print('c500c',c500c)
     #--------XCHECK----------
     # this :  5.8570333
     # hyper:  5.85131566984245
     
     P500c   = P500c_gnfw(cosmo,a,icm,M500c)
-    print('P500c',P500c)
+    if verbose: print('P500c',P500c)
     #--------XCHECK----------
     # this :  1.3663051e-08
     # hyper:  6.770158664810688E-010
     
     ry = rx*R200c
-    print('r',r)
+    if verbose: print('r',r)
     #--------XCHECK----------
     # this :  8.457127621049304e+21
     # hyper:  8.456419282673272E+021
     
     s = ry/R500c
-    print('s',s)
+    if verbose: print('s',s)
     #--------XCHECK----------
     # this :  0.014726206
     # hyper:  1.472694084377126E-002
     
     x = ry/rs
-    print('x',x)
+    if verbose: print('x',x)
     #--------XCHECK----------
     # this :  0.08625188
     # hyper:  8.617197972800157E-002
@@ -433,14 +433,14 @@ def table_halo(cosmo,a,icm,M,rx):
     #pdb.set_trace()
     #print('dd')
     dm = rho_nfw(x,M200c,R200c,c200c)#;print(x,M200c,R200c,c200c,dm)
-    print('dm',dm)
+    if verbose: print('dm',dm)
     #--------XCHECK----------
     # this :  1.7799716e-22
     # hyper:  1.778349949090758E-022
     
     f  = acc_nfw(x,M200c,R200c,c200c)#;print(f)
     f  = abs(f)
-    print('f',f)
+    if verbose: print('f',f)
     #--------XCHECK----------
     # this :  6.6681764e-07
     # hyper:  6.659556321600092E-007
@@ -450,7 +450,7 @@ def table_halo(cosmo,a,icm,M,rx):
     # GNFW
     #print('ee')
     P       = P500c*P_gnfw(icm,s)#;print(P)
-    print('P',P)
+    if verbose: print('P',P)
     #--------XCHECK----------
     # this :  1.8522899e-08
     # hyper:  1.852071281979021E-008
@@ -458,13 +458,13 @@ def table_halo(cosmo,a,icm,M,rx):
     #Pnth    = P500c*Pnth_gnfw(icm,s)
     #dPdr    = P500c*dPdx_gnfw(icm,s)/R500c
     dPtotdr = P500c*dPdx_tot(icm,s)/R500c
-    print('dPtotdr',dPtotdr)
+    if verbose: print('dPtotdr',dPtotdr)
     #--------XCHECK----------
     # this :  -9.100081e-31
     # hyper:  -9.099857761046103E-031
 
     dg      = abs(dPtotdr/f)
-    print('dg',dg)
+    if verbose: print('dg',dg)
     #--------XCHECK----------
     # this :  1.3647031e-24
     # hyper:  1.366436038919133E-024
@@ -472,7 +472,7 @@ def table_halo(cosmo,a,icm,M,rx):
     #####fp      = abs(dPdr/dg)
     T       = P/(k_cgs*(dg*1e24)/icm['mu'])*1e24
     #pdb.set_trace()
-    print('T',T)
+    if verbose: print('T',T)
     #--------XCHECK----------
     # this :  96701032
     # hyper:  96566999.2430575
@@ -481,7 +481,7 @@ def table_halo(cosmo,a,icm,M,rx):
 
     rho     = dm
     psi     = abs(psi_nfw(x,M200c,R200c,c200c))
-    print('psi',psi)
+    if verbose: print('psi',psi)
     #--------XCHECK----------
     # this :  3.677963e-06
     # hyper:  3.674160763279385E-006
@@ -587,6 +587,8 @@ def table_icm(cosmo,a,icm,rho,psi):
     
     return rho,psi,jnp.mean(M[idx]),jnp.mean(r[idx]),jnp.mean(T[idx]),jnp.mean(P[idx])#,jnp.mean(s[idx]),jnp.mean(x[idx]),jnp.mean(vsq[idx]),jnp.mean(Pnth[idx])
 
+
+verbose=False
 mH_cgs   = 1.67223e-24
 cosmo = jc.Planck15()
 
@@ -623,8 +625,7 @@ M,rx,s,x,rho,psi,T,P = res
 import tensorflow_probability as tfp; tfp = tfp.substrates.jax
 tfb = tfp.bijectors
 tfd = tfp.distributions
-psd_kernels = tfp.math.psd_kernels
-
+psd_kernels  = tfp.math.psd_kernels
 
 index_points = jnp.array([1e-25, 1e-7]).reshape([-1,2])
 
@@ -642,7 +643,7 @@ model_r = tfd.GaussianProcessRegressionModel( psd_kernels.ExponentiatedQuadratic
 
 print('GPmodel', model_M.mean(), model_r.mean())
 
-print('table', table_halo(cosmo,a,icm, 2.20931786e+13,1.04999627 )[4:6])
+print('table', table_halo(cosmo,a,icm, 2.20931786e+13,1.04999627 )[4:6])# 4->rho 5->psi
 #print('------------------table_icm-------------------')
 #rho = 1e-2
 #psi = 3.6779604e-06
