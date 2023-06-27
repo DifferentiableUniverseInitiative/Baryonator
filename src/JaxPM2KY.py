@@ -2,11 +2,11 @@
 from time import time
 
 start = time()
-
+import logging as lg
 import jax
 import jax.numpy as jnp
 import jax_cosmo as jc
-
+import argparse
 from jax.experimental.ode import odeint
 from jaxpm.painting import cic_paint, cic_paint_2d, cic_read, compensate_cic
 from jaxpm.pm import linear_field, lpt, make_ode_fn
@@ -96,7 +96,7 @@ params_camels_optimized_extreme = jnp.array([100.93629056,100.0582693,0.46008348
 
 box_size = [200.,200.,4000.]    #[200.,200.,4000.] Transverse comoving size of the simulation volume Mpc/h
 #nc = [32, 32, 64]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
-nc = [64, 64, 1280]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
+nc = [64, 64, 128]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
 
 lensplane_width = 102.5         # Width of each lensplane
 n_lens = int(box_size[-1] // lensplane_width)
@@ -129,10 +129,10 @@ c     = 3e8      # m^2/s^2
 mH_cgs   = 1.67223e-24
 
 icm = {}
-icm['XH']  = 0.76
-icm['YHe'] = 0.24
-icm['mu']   = mH_cgs/(2*icm['XH'] + 3*icm['YHe']/4)
-icm['mue']  = mH_cgs/(  icm['XH'] + 2*icm['YHe']/4)
+icm['XH']     = 0.76
+icm['YHe']    = 0.24
+icm['mu']     = mH_cgs/(2*icm['XH'] + 3*icm['YHe']/4)
+icm['mue']    = mH_cgs/(  icm['XH'] + 2*icm['YHe']/4)
 #icm['mue']  = mH_cgs/(  cosmo['XH'] + 4*cosmo['YHe']/4 + 676*icm%Zxry*cosmo%XH)
 icm['p0']     = 8.403
 icm['c500']   = 1.177
@@ -142,12 +142,6 @@ icm['beta']   = 5.4905
 
 seed = 300
 
-
-xgrid, ygrid = np.meshgrid(np.linspace(0, field_size, field_npix, endpoint=False), # range of X coordinates
-                           np.linspace(0, field_size, field_npix, endpoint=False)) # range of Y coordinates
-
-coords = np.stack([xgrid, ygrid], axis=0)*u.deg
-coords2 = coords.reshape([2, -1]).T.to(u.rad)
 
 # if we want to ignore some dynamical parameters in the functions
 #from functools import partial
@@ -244,18 +238,17 @@ def create_kgrid(nx, ny, nz, lx, ly, lz):
     """
     Create a 3D k grid for Fourier space calculations
     """
-    xres   = lx/nx #Mpc/h
-    yres   = ly/ny #Mpc/h
-    zres   = lz/nz #Mpc/h
+    xres = lx/nx #Mpc/h
+    yres = ly/ny #Mpc/h
+    zres = lz/nz #Mpc/h
 
-    kx = jnp.fft.fftshift(jnp.fft.fftfreq(nx, xres))# h/Mpc
-    ky = jnp.fft.fftshift(jnp.fft.fftfreq(ny, yres))# h/Mpc
-    kz = jnp.fft.fftshift(jnp.fft.fftfreq(nz, zres))# h/Mpc
+    kx   = jnp.fft.fftshift(jnp.fft.fftfreq(nx, xres))# h/Mpc
+    ky   = jnp.fft.fftshift(jnp.fft.fftfreq(ny, yres))# h/Mpc
+    kz   = jnp.fft.fftshift(jnp.fft.fftfreq(nz, zres))# h/Mpc
     
-    mg = jnp.meshgrid(kx,ky,kz)
+    mg   = jnp.meshgrid(kx,ky,kz)
 
-    km  = jnp.sqrt(mg[0]**2+mg[1]**2+mg[2]**2)
-    #k2[nx/2,ny/2,nz/2]=1.
+    km   = jnp.sqrt(mg[0]**2+mg[1]**2+mg[2]**2)
 
     return km
 
@@ -297,16 +290,24 @@ def make_HPM_table_interpolator():
     return intpT, intpP
 
 # @jax.jit
-def HPM_GPmodel(rho,psi,a, logMmin=8,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=50):
+def HPM_GPmodel(rho,psi,a,logMmin=8,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
     """Takes rho and psi and extracts the inverse mapping via
-     HPM table to predict the value of T & P.
+       HPM table to predict the value of T & P.
 
     Parameters
     ----------
-    rho : float, arr
+    rho     : float, arr
      density values 
-    psi : float, arr
+    psi     : float, arr
      fscalar valaues
+    a       : float
+     cosmological scale factor
+    logMmin : float (optional)
+    logMmax : float (optional)
+    NM      : int   (optional)
+    rmin    : float (optional)
+    rmax    : float (optional)
+    Nr      : int   (optional)
 
     Returns
     ----------
@@ -316,37 +317,45 @@ def HPM_GPmodel(rho,psi,a, logMmin=8,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=50):
      Pressure in units of ????
     """
     
-    verbose = False
 
+    # Locations to interpolate AT 
+    index_points = jnp.array([np.log10(rho), np.log10(psi)]).reshape([-1,2])
+    
     # First construct a table to map M/r -> rho/psi
     batched_r  = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
-    batched_Mr = jax.vmap(batched_r, in_axes=[None,None,None,0,None]); del batched_r
+    batched_Mr = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
+    del batched_r
     m_grid     = jnp.logspace(logMmin,logMmax,NM) # Msun/h
-    r_grid     = jnp.linspace(rmin,rmax,Nr)# unitless, to be multiplied by R200c
-    res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten());del batched_Mr
-    M,rx,_,_,rho,psi,T,P = res
+    r_grid     = jnp.linspace(rmin,rmax,Nr)       # unitless, to be multiplied by R200c
+    res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
+    del batched_Mr, m_grid, r_grid
+    tabM,tabrx,_,_,tabrho,tabpsi,tabT,tabP = res
     del res
 
     # Use GP to make an interpolate to apply a reverse mapping
-    tfb = tfp.bijectors
-    tfd = tfp.distributions
-    psd_kernels  = tfp.math.psd_kernels
+    tfb     = tfp.bijectors
+    tfd     = tfp.distributions
+    kern    = tfp.math.psd_kernels.ExponentiatedQuadratic()
 
-    index_points = jnp.array([np.log10(rho), np.log10(psi)]).reshape([-1,2])
-    kern         = psd_kernels.ExponentiatedQuadratic()
+    _rho    = np.log10(tabrho).flatten() 
+    _psi    = np.log10(tabpsi).flatten()
+    _T      = np.log10(tabT).flatten()
+    _P      = np.log10(tabP).flatten()
 
     model_T = tfd.GaussianProcessRegressionModel( kern,
-                      index_points=index_points,
-                      observation_index_points=jnp.stack([np.log10(rho).flatten(), np.log10(psi).flatten()], axis=1),
-                      observations=np.log10(T).flatten(),
-                     )
+                                                  index_points=index_points,
+                                                  observation_index_points=jnp.stack([_rho,_psi], axis=1),
+                                                  observations=_T,
+                                                 )
 
     model_P = tfd.GaussianProcessRegressionModel( kern,
-                      index_points=index_points,
-                      observation_index_points=jnp.stack([np.log10(rho).flatten(), np.log10(psi).flatten()], axis=1),
-                      observations=np.log10(P).flatten(),
-                     )
-    return 10**model_T.mean(), 10**model_P.mean()
+                                                  index_points=index_points,
+                                                  observation_index_points=jnp.stack([_rho,_psi], axis=1),
+                                                  observations=_P,
+                                                )
+    del _rho,_psi,_T,_P
+
+    return np.asarray(10**model_T.mean()), np.asarray(10**model_P.mean())
 
 
 @profile(lines_to_print=5, output_file='log2.txt')
@@ -357,43 +366,41 @@ def particles_to_DeltaTP_mesh(res, i):
     input particle list, output 3D mesh of deltaa, T and P
     """
 
-    Nparticles = len(res[0][i])
-    inds = jax.random.shuffle(jax.random.PRNGKey(seed), jnp.arange(0,Nparticles-1))
-    split = int(Omega_b/Omega_m*Nparticles)
+    Nparticles  = len(res[0][i])
+    inds        = jax.random.shuffle(jax.random.PRNGKey(seed), jnp.arange(0,Nparticles-1))
+    split       = int(Omega_b/Omega_m*Nparticles)
     egd_pos_gas = res[0][i][inds[:split]]
     egd_pos_dm  = res[0][i][inds[split:]]
 
     # may be able to remove some of these that are not used later
-    total_mass_dmo = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), res[0][i])
+    total_mass_dmo  = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), res[0][i])
     total_delta_dmo = total_mass_dmo/total_mass_dmo.mean() - 1
-    egd_rho_dm = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), egd_pos_dm) # this is still in number of particles
-    egd_rho_gas = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), egd_pos_gas)
+    egd_rho_dm      = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), egd_pos_dm) # this is still in number of particles
+    egd_rho_gas     = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), egd_pos_gas)
 
-    total_particles_egd = cic_paint(egd_rho_dm,
-                            egd_pos_gas + egd_correction(total_delta_dmo, egd_pos_gas, params_camels_optimized))
-    total_mass_egd = total_particles_egd * Msun_per_particle[i]
-    total_delta_egd = total_mass_egd/total_mass_egd.mean() - 1
+    total_particles_egd = cic_paint(egd_rho_dm, egd_pos_gas + egd_correction(total_delta_dmo, egd_pos_gas, params_camels_optimized))
+    total_mass_egd      = total_particles_egd * Msun_per_particle[i]
+    total_delta_egd     = total_mass_egd/total_mass_egd.mean() - 1
 
-    F_rhom = jnp.fft.fftshift(jnp.fft.fftn(total_mass_egd))
-    kg = create_kgrid(total_mass_egd.shape[0], total_mass_egd.shape[1], total_mass_egd.shape[2], lx=box_size[0], ly=box_size[1], lz=box_size[2])
-
-    kg = kg.at[kg==0].set(jnp.inf)
-    F_fscalar = 2*jnp.pi**2*G*F_rhom/kg # m^3/kg/s^2 (Msun/h)/(Mpc/h)^2  
-    R_fscalar = jnp.fft.ifftn(jnp.fft.ifftshift(F_fscalar)) 
-
-    # we want km/s/Gyr [L/T^2] -- in the paper
+    F_rhom     = jnp.fft.fftshift(jnp.fft.fftn(total_mass_egd))
+    kg         = create_kgrid(total_mass_egd.shape[0], total_mass_egd.shape[1], total_mass_egd.shape[2], lx=box_size[0], ly=box_size[1], lz=box_size[2])
+    kg         = kg.at[kg==0].set(jnp.inf)
+    F_fscalar  = 2*jnp.pi**2*G*F_rhom/kg # m^3/kg/s^2 (Msun/h)/(Mpc/h)^2  
+    R_fscalar  = jnp.fft.ifftn(jnp.fft.ifftshift(F_fscalar)) 
     R_fscalar -= jnp.min(R_fscalar.real)  
-    R_fscalar_new = R_fscalar * (10**(-3))**3 * (1.989* 10**30 / h)  * 3.1536 * 10**16 / (3.086*10**19/h)**2 
+    R_fscalar  = R_fscalar * (10**(-3))**3 * (1.989* 10**30 / h)  * 3.1536 * 10**16 / (3.086*10**19/h)**2 
 
-    Tf = intpT( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
-    Pf = intpP( np.c_[(R_fscalar_new.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
-    
+
     # pdb.set_trace()
-
-    # here we want to interpolate back to the particles, run the HPM tables from the particles, and later project it onto 2D 
-    # Tf,Pf = HPM_GPmodel((total_mass_egd/np.mean(total_mass_egd)).flatten(), (R_fscalar_new.real).flatten(), a_center[i])
-    # Tf = Tf.reshape((nc[0],nc[1],nc[2]))
-    # Pf = Pf.reshape((nc[0],nc[1],nc[2]))
+    if GPHPM==False:
+        Tf = intpT( np.c_[(R_fscalar.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
+        Pf = intpP( np.c_[(R_fscalar.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
+        
+    if GPHPM==True:
+        # here we want to interpolate back to the particles, run the HPM tables from the particles, and later project it onto 2D 
+        Tf,Pf = HPM_GPmodel((total_mass_egd/np.mean(total_mass_egd)).flatten(), (R_fscalar.real).flatten(), a_center[i])
+        Tf    = Tf.reshape((nc[0],nc[1],nc[2]))
+        Pf    = Pf.reshape((nc[0],nc[1],nc[2]))
 
     return total_delta_egd, Tf, Pf
 
@@ -440,23 +447,46 @@ def tsz_Born(cosmo,
 
 ### main part of code ###############################
 
-cosmo = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
-cosmo2 = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
+parser = argparse.ArgumentParser()
+parser.add_argument('--GPHPM', default=False, dest='GPHPM',action='store_true', help='use GP for HPM table')
+args  = parser.parse_args()
+GPHPM = args.GPHPM
 
+lg.basicConfig(format   = '[%(asctime)s] %(message)s',
+               datefmt  = '%H:%M:%S',
+               level    = lg.WARNING
+              )
+
+lg.warning("Generating xygrid and corresponding radec grid")
+
+xgrid, ygrid = np.meshgrid(np.linspace(0, field_size, field_npix, endpoint=False), # range of X coordinates
+                           np.linspace(0, field_size, field_npix, endpoint=False)) # range of Y coordinates
+
+coords  = np.stack([xgrid, ygrid], axis=0)*u.deg
+coords2 = coords.reshape([2, -1]).T.to(u.rad)
+
+lg.warning("Setting up Cosmology")
+cosmo   = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
+cosmo2  = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
+
+lg.warning("Creating Nbody, returning sim and array of scalefactos")
 res, a_center = create_nbody(cosmo, cosmo2)
 
+lg.warning("Computing Msun per particle and rhom")
 Msun_per_particle, Rho_m_mean = calculat_Msun_per_particle(res[0], a_center, cosmo)
 
 # first loop to get all the 3D quantities
 #Total_mass = []
 #DM_mass = []
 
-Total_delta = []
-Temperature = []
-Pressure = []
+Total_delta  = []
+Temperature  = []
+Pressure     = []
 
-intpT, intpP = make_HPM_table_interpolator()
+if GPHPM==False:
+    intpT, intpP = make_HPM_table_interpolator()
 
+lg.warning("Making lens planes")
 for i in range(n_lens):
 
     print('Lens bin', i)
@@ -477,54 +507,60 @@ for i in range(n_lens):
 
 
 # do first level of integrating, into slabs of density and pressure 
-lensplanes = []
+lensplanes    = []
 pressureplane = []
+
+lg.warning("Setting up planes at various redshifts")
 
 for i in range(n_lens):
 
-    width = lensplane_width/box_size[-1]*nc[-1]
-    center = (i+0.5)*lensplane_width/box_size[-1]*nc[-1]
+    lg.warning("-- Processing lenplane %d"%i)
+   
+    width     = lensplane_width/box_size[-1]*nc[-1]
+    center    = (i+0.5)*lensplane_width/box_size[-1]*nc[-1]
+    lg.warning("---- Setting width %.5f"%width)
+    lg.warning("---- Setting center %.5f"%center)
+
     layer_min = int(center-0.5*width) 
     
     # replace this by the density plane function for both
-    density_plane = Total_delta[i][:,:, int(center-0.5*width):int(center+0.5*width)].sum(axis=2)
+    lg.warning("---- Adding density plane ")
+    density_plane  = Total_delta[i][:,:, int(center-0.5*width):int(center+0.5*width)].sum(axis=2)
+    lensplanes.append(
+                      {'r'    : r_center[i],
+                       'a'    : a_center[::-1][i],
+                       'plane': density_plane,
+                       'dx'   : box_size[0]/nc[0],
+                       'dz'   : lensplane_width
+                      }
+                     )
+
+    lg.warning("---- Adding pressure plane ")
     pressure_plane = Pressure[i][:,:, int(center-0.5*width):int(center+0.5*width)].sum(axis=2)
-    # pdb.set_trace()
+    pressureplane.append(
+                         {'r'    : r_center[i],
+                          'a'    : a_center[::-1],
+                          'plane': pressure_plane,
+                          'dx'   : box_size[0]/nc[0],
+                          'dz'   : lensplane_width
+                         }
+                        )
 
-    lensplanes.append({'r': r_center[i],
-                      'a': a_center[::-1][i],
-                      'plane': density_plane,
-                      'dx':box_size[0]/nc[0],
-                      'dz':lensplane_width})
-    
-    # replace with proper coordiate transform
-    # pressureplane.append(pressure_plane)
-
-    pressureplane.append({'r': r_center[i],
-                      'a': a_center[::-1],
-                      'plane': pressure_plane,
-                      'dx':box_size[0]/nc[0],
-                      'dz':lensplane_width})
-
+lg.warning("Integrating along the line of sight -- kappa")
 # now do integrated quantities: kappa planes, pressure planes
 kappa = convergence_Born(cosmo,
-                      lensplanes,
-                      coords=jnp.array(coords2).T.reshape(2,field_npix,field_npix),
-                      z_source=z_source)
+                         lensplanes,
+                         coords   = jnp.array(coords2).T.reshape(2,field_npix,field_npix),
+                         z_source = z_source
+                        )
 
 
-# really we should write a function similar to convergence_Born here
+lg.warning("Integrating along the line of sight -- Comptony")
 y = tsz_Born(cosmo,
              lensplanes,
              coords=jnp.array(coords2).T.reshape(2,field_npix,field_npix),
              z_source=z_source)
 
-# y = []
-# for i in range(n_lens):
-#     y.append(np.sum(np.array(pressureplane)[:(i+1), :,:], axis=0))
-
-# print("kappa", kappa[:3])
-# print("y", y[:3])
 
 np.savez('kappa.npz', kappa=kappa, z=z_source)
 np.savez('y.npz', y=y, z=1./a_center-1)
