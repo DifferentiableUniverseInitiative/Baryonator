@@ -35,6 +35,20 @@ import cProfile
 import pstats
 from functools import wraps
 
+#class RelativeSeconds(lg.Formatter):
+#    def format(self, record):
+#        record.relativeCreated = record.relativeCreated // 1000
+#        return super().format(record)
+
+class RelativeSeconds(lg.Formatter):
+    def format(self, record):
+        nhrs  = record.relativeCreated//(1000*60*60)
+        nmins = record.relativeCreated//(1000*60)-nhrs*60
+        nsecs = record.relativeCreated//(1000)-nmins*60
+        record.relativeCreated = "%02d:%02d:%02d"%(nhrs,nmins,nsecs)#, record.relativeCreated//(1000) )
+        #print( dtype(record.relativeCreated//(1000)) )
+        return super(RelativeSeconds, self).format(record)
+
 
 def profile(output_file=None, sort_by='cumulative', lines_to_print=None, strip_dirs=False):
     """A time profiler decorator.
@@ -373,15 +387,17 @@ def particles_to_DeltaTP_mesh(res, i):
     egd_pos_dm  = res[0][i][inds[split:]]
 
     # may be able to remove some of these that are not used later
+    lg.warning("---- CIC painting")
     total_mass_dmo  = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), res[0][i])
     total_delta_dmo = total_mass_dmo/total_mass_dmo.mean() - 1
     egd_rho_dm      = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), egd_pos_dm) # this is still in number of particles
-    egd_rho_gas     = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), egd_pos_gas)
+    egd_rho_gas     = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), egd_pos_gas) # This doesn't get used 
 
     total_particles_egd = cic_paint(egd_rho_dm, egd_pos_gas + egd_correction(total_delta_dmo, egd_pos_gas, params_camels_optimized))
     total_mass_egd      = total_particles_egd * Msun_per_particle[i]
     total_delta_egd     = total_mass_egd/total_mass_egd.mean() - 1
 
+    lg.warning("---- Computing fscalar")
     F_rhom     = jnp.fft.fftshift(jnp.fft.fftn(total_mass_egd))
     kg         = create_kgrid(total_mass_egd.shape[0], total_mass_egd.shape[1], total_mass_egd.shape[2], lx=box_size[0], ly=box_size[1], lz=box_size[2])
     kg         = kg.at[kg==0].set(jnp.inf)
@@ -391,13 +407,14 @@ def particles_to_DeltaTP_mesh(res, i):
     R_fscalar  = R_fscalar * (10**(-3))**3 * (1.989* 10**30 / h)  * 3.1536 * 10**16 / (3.086*10**19/h)**2 
 
 
-    # pdb.set_trace()
     if GPHPM==False:
+        lg.warning("---- Interpolating T/P values")
         Tf = intpT( np.c_[(R_fscalar.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
         Pf = intpP( np.c_[(R_fscalar.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
         
     if GPHPM==True:
         # here we want to interpolate back to the particles, run the HPM tables from the particles, and later project it onto 2D 
+        lg.warning("---- Interpolating T/P values")
         Tf,Pf = HPM_GPmodel((total_mass_egd/np.mean(total_mass_egd)).flatten(), (R_fscalar.real).flatten(), a_center[i])
         Tf    = Tf.reshape((nc[0],nc[1],nc[2]))
         Pf    = Pf.reshape((nc[0],nc[1],nc[2]))
@@ -452,10 +469,11 @@ parser.add_argument('--GPHPM', default=False, dest='GPHPM',action='store_true', 
 args  = parser.parse_args()
 GPHPM = args.GPHPM
 
-lg.basicConfig(format   = '[%(asctime)s] %(message)s',
-               datefmt  = '%H:%M:%S',
-               level    = lg.WARNING
-              )
+
+lg.basicConfig(level = lg.WARNING)
+
+formatter = RelativeSeconds("[%(relativeCreated)s]  %(message)s")
+lg.root.handlers[0].setFormatter(formatter)
 
 lg.warning("Generating xygrid and corresponding radec grid")
 
@@ -489,7 +507,8 @@ if GPHPM==False:
 lg.warning("Making lens planes")
 for i in range(n_lens):
 
-    print('Lens bin', i)
+    lg.warning('-- Lens bin %d'%i)
+    #print('Lens bin', i)
 
     Meshes = particles_to_DeltaTP_mesh(res, i)
 
