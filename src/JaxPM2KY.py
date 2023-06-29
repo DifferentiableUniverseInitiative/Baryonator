@@ -41,7 +41,6 @@ class RelativeSeconds(lg.Formatter):
         return super(RelativeSeconds, self).format(record)
 
 
-
 ### input parameters (free)
 # currently this is just controlling the EDG part, later we want to also connect it to the HPM table
 
@@ -52,7 +51,7 @@ params_camels_optimized_extreme = jnp.array([100.93629056,100.0582693,0.46008348
 
 box_size = [200.,200.,4000.]    #[200.,200.,4000.] Transverse comoving size of the simulation volume Mpc/h
 #nc = [32, 32, 64]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
-nc = [64, 64, 128]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
+nc = [64, 64, 1280]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
 
 lensplane_width = 102.5         # Width of each lensplane
 n_lens = int(box_size[-1] // lensplane_width)
@@ -313,11 +312,11 @@ def HPM_GPmodel(rho,psi,a,logMmin=8,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
     return np.asarray(10**model_T.mean()), np.asarray(10**model_P.mean())
 
 
-#@jax.jit
-def particles_to_DeltaTP_mesh(res, i):
+
+def EGD_move_particles(res, i):
 
     """
-    input particle list, output 3D mesh of deltaa, T and P
+    input particle list, output moved particle list as well as the total mass field on a mesh
     """
 
     Nparticles  = len(res[0][i])
@@ -331,11 +330,19 @@ def particles_to_DeltaTP_mesh(res, i):
     total_mass_dmo  = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), res[0][i])
     total_delta_dmo = total_mass_dmo/total_mass_dmo.mean() - 1
     egd_rho_dm      = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), egd_pos_dm) # this is still in number of particles
-    egd_rho_gas     = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), egd_pos_gas) # This doesn't get used 
 
     total_particles_egd = cic_paint(egd_rho_dm, egd_pos_gas + egd_correction(total_delta_dmo, egd_pos_gas, params_camels_optimized))
     total_mass_egd      = total_particles_egd * Msun_per_particle[i]
-    total_delta_egd     = total_mass_egd/total_mass_egd.mean() - 1
+
+    return jnp.concatenate((egd_pos_dm, egd_pos_gas + egd_correction(total_delta_dmo, egd_pos_gas, params_camels_optimized))), total_mass_egd
+
+
+def lookup_HPM(particles, total_mass_egd):
+    """
+    Given particle positions and total mass mesh, calculate f scalar and rho/rho_m to get T and P grid, 
+    interpolate the T and P values onto the particle grid and return a list of T and P according to the 
+    chosen HPM table method. 
+    """
 
     lg.warning("---- Computing fscalar")
     F_rhom     = jnp.fft.fftshift(jnp.fft.fftn(total_mass_egd))
@@ -346,20 +353,20 @@ def particles_to_DeltaTP_mesh(res, i):
     R_fscalar -= jnp.min(R_fscalar.real)  
     R_fscalar  = R_fscalar * (10**(-3))**3 * (1.989* 10**30 / h)  * 3.1536 * 10**16 / (3.086*10**19/h)**2 
 
+    # get rho and f scalar on each particle
+    fscalar_pos = cic_read(R_fscalar.real, particles)
+    rho_pos = cic_read(total_mass_egd/np.mean(total_mass_egd), particles)
 
     if GPHPM==False:
         lg.warning("---- Interpolating T/P values")
-        Tf = intpT( np.c_[(R_fscalar.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
-        Pf = intpP( np.c_[(R_fscalar.real).flatten(), (total_mass_egd/np.mean(total_mass_egd)).flatten() ]).reshape((nc[0],nc[1],nc[2]))
+        Tf = intpT( jnp.c_[fscalar_pos, rho_pos])
+        Pf = intpP( jnp.c_[fscalar_pos, rho_pos])
         
-    if GPHPM==True:
-        # here we want to interpolate back to the particles, run the HPM tables from the particles, and later project it onto 2D 
+    if GPHPM==True: 
         lg.warning("---- Interpolating T/P values")
-        Tf,Pf = HPM_GPmodel((total_mass_egd/np.mean(total_mass_egd)).flatten(), (R_fscalar.real).flatten(), a_center[i])
-        Tf    = Tf.reshape((nc[0],nc[1],nc[2]))
-        Pf    = Pf.reshape((nc[0],nc[1],nc[2]))
+        Tf,Pf = HPM_GPmodel(rho_pos, fscalar_pos, a_center[i])
 
-    return total_delta_egd, Tf, Pf
+    return Tf, Pf
 
 @jax.jit
 def tsz_Born(cosmo,
@@ -398,6 +405,39 @@ def tsz_Born(cosmo,
 
     return tsz
 
+def pressure_plane(positions, p,
+                  box_shape,
+                  center,
+                  width,
+                  plane_resolution,
+                  smoothing_sigma=None):
+    """ Extacts a pressure plane from the 3d positions of points
+    """
+    nx, ny, nz = box_shape
+    xy = positions[..., :2]
+    d = positions[..., 2]
+
+    # Apply 2d periodic conditions
+    xy = jnp.mod(xy, nx)
+
+    # Rescaling positions to target grid
+    xy = xy / nx * plane_resolution
+
+    # Selecting only particles that fall inside the volume of interest
+    weight = jnp.where((d > (center - width / 2)) & (d <= (center + width / 2)), 1., 0.) * p
+    # Painting density plane
+    p_plane = cic_paint_2d(jnp.zeros([plane_resolution, plane_resolution]), xy, weight)
+
+    # Apply density normalization
+    p_plane  = p_plane  / ((nx / plane_resolution) *
+                                     (ny / plane_resolution) * (width))
+
+    # Apply Gaussian smoothing if requested
+    if smoothing_sigma is not None:
+        p_plane  = gaussian_smoothing(p_plane , 
+                                           smoothing_sigma)
+
+    return p_plane 
 
 
 ### main part of code ###############################
@@ -407,13 +447,17 @@ parser.add_argument('--GPHPM', default=False, dest='GPHPM',action='store_true', 
 args  = parser.parse_args()
 GPHPM = args.GPHPM
 
+if GPHPM==False:
+    intpT, intpP = make_HPM_table_interpolator()
+
 
 lg.basicConfig(level = lg.WARNING)
 
 formatter = RelativeSeconds("[%(relativeCreated)s]  %(message)s")
 lg.root.handlers[0].setFormatter(formatter)
 
-lg.warning("Generating xygrid and corresponding radec grid")
+
+lg.warning("Generating xygrid and corresponding radec grid for final observables")
 
 xgrid, ygrid = np.meshgrid(np.linspace(0, field_size, field_npix, endpoint=False), # range of X coordinates
                            np.linspace(0, field_size, field_npix, endpoint=False)) # range of Y coordinates
@@ -427,92 +471,74 @@ cosmo2  = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
 
 lg.warning("Creating Nbody, returning sim and array of scalefactos")
 res, a_center = create_nbody(cosmo, cosmo2)
+# np.savez('res.npz', res=res)
 
 lg.warning("Computing Msun per particle and rhom")
 Msun_per_particle, Rho_m_mean = calculat_Msun_per_particle(res[0], a_center, cosmo)
 
-# first loop to get all the 3D quantities
-#Total_mass = []
-#DM_mass = []
+lg.warning("Making density and pressure planes")
 
-Total_delta  = []
-Temperature  = []
-Pressure     = []
-
-if GPHPM==False:
-    intpT, intpP = make_HPM_table_interpolator()
-
-lg.warning("Making lens planes")
-for i in range(n_lens):
-
-    lg.warning('-- Lens bin %d'%i)
-    #print('Lens bin', i)
-
-    Meshes = particles_to_DeltaTP_mesh(res, i)
-
-    # Total_mass.append(total_mass_egd)
-    # DM_mass.append(egd_rho_dm * Msun_per_particle[i])
-    Total_delta.append(Meshes[0])
-    Temperature.append(Meshes[1])
-    Pressure.append(Meshes[2])    
-
-# print("total mass", Total_mass[:3])
-# print("total delta", Total_delta[:3])
-# print("DM mass", DM_mass[:3])
-# print("temperature", Temperature[:3])
-# print("pressure", Pressure[:3])
-
-
-# do first level of integrating, into slabs of density and pressure 
 lensplanes    = []
 pressureplane = []
-
-lg.warning("Setting up planes at various redshifts")
 
 for i in range(n_lens):
 
     lg.warning("-- Processing lenplane %d"%i)
+
+    lg.warning("---- Moving particles via EGD")
+    particles_moved, total_mass_egd = EGD_move_particles(res, i)
+    # np.savez('moved_res_'+str(i)+'.npz', res=particles_moved, mass_mesh=total_mass_egd)
    
     width     = lensplane_width/box_size[-1]*nc[-1]
     center    = (i+0.5)*lensplane_width/box_size[-1]*nc[-1]
     lg.warning("---- Setting width %.5f"%width)
     lg.warning("---- Setting center %.5f"%center)
-
-    layer_min = int(center-0.5*width) 
     
-    # replace this by the density plane function for both
+
     lg.warning("---- Adding density plane ")
-    density_plane  = Total_delta[i][:,:, int(center-0.5*width):int(center+0.5*width)].sum(axis=2)
+    dp = density_plane(particles_moved,
+                              nc,
+                              (i+0.5)*lensplane_width/box_size[-1]*nc[-1],
+                              width=lensplane_width/box_size[-1]*nc[-1],
+                              plane_resolution=field_npix   )
+    # np.savez('dp_'+str(i)+'.npz', dp=dp)
+
     lensplanes.append(
                       {'r'    : r_center[i],
                        'a'    : a_center[::-1][i],
-                       'plane': density_plane,
+                       'plane': dp,
                        'dx'   : box_size[0]/nc[0],
                        'dz'   : lensplane_width
                       }
                      )
 
     lg.warning("---- Adding pressure plane ")
-    pressure_plane = Pressure[i][:,:, int(center-0.5*width):int(center+0.5*width)].sum(axis=2)
+    Tf, Pf = lookup_HPM(particles_moved, total_mass_egd)
+    # np.savez('TP.npz', T=Tf, P=Pf)
+    pp = pressure_plane(particles_moved, Pf,
+                              nc,
+                              (i+0.5)*lensplane_width/box_size[-1]*nc[-1],
+                              width=lensplane_width/box_size[-1]*nc[-1],
+                              plane_resolution=field_npix)
+    # np.savez('pp_'+str(i)+'.npz', pp=pp)
+
     pressureplane.append(
                          {'r'    : r_center[i],
                           'a'    : a_center[::-1],
-                          'plane': pressure_plane,
+                          'plane': pp,
                           'dx'   : box_size[0]/nc[0],
                           'dz'   : lensplane_width
                          }
                         )
 
 lg.warning("Integrating along the line of sight -- kappa")
-# now do integrated quantities: kappa planes, pressure planes
 kappa = convergence_Born(cosmo,
                          lensplanes,
                          coords   = jnp.array(coords2).T.reshape(2,field_npix,field_npix),
                          z_source = z_source
                         )
 
-
-lg.warning("Integrating along the line of sight -- Comptony")
+lg.warning("Integrating along the line of sight -- Compton y")
 y = tsz_Born(cosmo,
              lensplanes,
              coords=jnp.array(coords2).T.reshape(2,field_npix,field_npix),
