@@ -51,7 +51,7 @@ params_camels_optimized_extreme = jnp.array([100.93629056,100.0582693,0.46008348
 
 box_size = [200.,200.,4000.]    #[200.,200.,4000.] Transverse comoving size of the simulation volume Mpc/h
 #nc = [32, 32, 64]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
-nc = [64, 64, 1280]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
+nc = [64, 64, 640]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
 
 lensplane_width = 102.5         # Width of each lensplane
 n_lens = int(box_size[-1] // lensplane_width)
