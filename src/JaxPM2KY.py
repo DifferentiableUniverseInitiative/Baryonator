@@ -348,7 +348,7 @@ def EGD_move_particles(res, i):
     egd_rho_dm      = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), egd_pos_dm) # this is still in number of particles
 
     total_particles_egd = cic_paint(egd_rho_dm, egd_pos_gas + egd_correction(total_delta_dmo, egd_pos_gas, params_camels_optimized))
-    total_mass_egd      = total_particles_egd * Msun_per_particle[i]
+    total_mass_egd      = total_particles_egd * Msun_per_particle[::-1][i]
 
     return jnp.concatenate((egd_pos_dm, egd_pos_gas + egd_correction(total_delta_dmo, egd_pos_gas, params_camels_optimized))), total_mass_egd
 
