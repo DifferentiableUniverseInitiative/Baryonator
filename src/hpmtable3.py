@@ -1,7 +1,7 @@
 import os,sys
 # os.environ['JAX_ENABLE_X64']='True'
-from jax import config
-config.update("jax_enable_x64", True)
+#from jax import config
+#config.update("jax_enable_x64", True)
 
 from scipy.interpolate import CubicSpline
 import numpy as np
@@ -242,6 +242,7 @@ def dPdx_tot(icm,x):
 
 def psi_nfw(x,M,R,c,verbose=False):
     rhos  = (M)/(4*jnp.pi*(R)**3)*(c)**3/(jnp.log(1+c) - c/(1+c))
+    #print('rhos',rhos)
     if verbose: print('rhos',rhos)
     #--------XCHECK----------
     # this : 1.8115183e-23
@@ -253,7 +254,10 @@ def psi_nfw(x,M,R,c,verbose=False):
     # this : 9.8051515e+22
     # hyper: 9.813421148458727E+022
     
-    Apsi  = 4*jnp.pi*G_si*rhos*rs*Msun_si/Mpc_m**3*Mpc_cm
+    #Apsi  = 4*jnp.pi*G_si*rhos*rs*Msun_si/Mpc_m**3*Mpc_cm
+    Apsi  = 4*jnp.pi*(G_si*1e11)*(rhos*1e-17)*rs*(Msun_si*1e-30)/(Mpc_m*1e-22)**3*(Mpc_cm*1e-24)/1e6
+    #print('Apsi',Apsi)
+    #pdb.set_trace()
     if verbose: print('Apsi',Apsi)
     #pdb.set_trace()
     #--------XCHECK----------
@@ -271,14 +275,26 @@ def psi_nfw(x,M,R,c,verbose=False):
     psi_nfw=jnp.where(jnp.abs(x-1) < 1E-6, Apsi*(1-x/2), Apsi*jnp.log(x)/(x**2 - 1) )  
 
     return psi_nfw
-
+'''
+def rhocrit_z(cosmo,a):
+    hsq      = 8.5e-5/a**4+cosmo.Omega_m/a**3 + cosmo.Omega_de #in the original code there is also Omega_r/a**4
+    Hz       = H0_cgs*cosmo.h*jnp.sqrt(hsq) #[1/s] note here we are leaving in h
+    #print(hsq)
+    #print(Hz)
+    #print(3*Hz**2/(8*jnp.pi*G)/Msun_si*Mpc_m**3)
+    #pdb.set_trace()
+    #print(Msun_si)
+    #print(Mpc_m**3)
+    #return 3*(Hz*1e17)**2/(8*jnp.pi*G_si*1e11)/(Msun_si*1e-30)*(Mpc_m*1e-22)**3*1e-15 #[Msun/(Mpc)^3]
+    return 3*(Hz)**2/(8*jnp.pi*G_si)/(Msun_si)*(Mpc_m)**3 #[Msun/(Mpc)^3]
+'''
 def rhocrit_z(cosmo,a):
     hsq      = 8.5e-5/a**4+cosmo.Omega_m/a**3 + cosmo.Omega_de #in the original code there is also Omega_r/a**4
     Hz       = H0_cgs*cosmo.h*jnp.sqrt(hsq) #[1/s] note here we are leaving in h
     #print(3*Hz**2/(8*jnp.pi*G)/Msun_si*Mpc_m**3)
     #pdb.set_trace()
-    return 3*Hz**2/(8*jnp.pi*G_si)/Msun_si*Mpc_m**3 #[Msun/(Mpc)^3]
-
+    return 3*(Hz*1e17)**2/(8*jnp.pi*G_si*1e11)/(Msun_si*1e-30)*(Mpc_m*1e-22)**3/1e-13 #[Msun/(Mpc)^3]
+    #return 3*Hz**2/(8*jnp.pi*G_si)/Msun_si*Mpc_m**3 #[Msun/(Mpc)^3]
 
 def rhocrit_z_cgs(cosmo,a):
     hsq      = 8.5e-5/a**4+cosmo.Omega_m/a**3 + cosmo.Omega_de #in the original code there is also Omega_r/a**4
@@ -594,34 +610,45 @@ if __name__ == "__main__":
     r_grid     = jnp.linspace(0.1,4,100)# unitless, to be multiplied by R200c 
     res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
 
-    M,rx,s,x,rho,psi,T,P = res 
+    tabM,tabrx,tabs,tabx,tabrho,tabpsi,tabT,tabP = res 
+
+    _rho    = jnp.log10(tabrho).flatten()
+    _psi    = jnp.log10(tabpsi).flatten()
+    _T      = jnp.log10(tabT).flatten()
+    _P      = jnp.log10(tabP).flatten()
+    _M      = jnp.log10(tabM).flatten()
+    _R      = jnp.log10(tabrx).flatten()
+    #_rho    = (tabrho).flatten()
+    #_psi    = (tabpsi).flatten()
+    #_T      = (tabT).flatten()
+    #_P      = (tabP).flatten()
 
     import tensorflow_probability as tfp; tfp = tfp.substrates.jax
     tfb = tfp.bijectors
     tfd = tfp.distributions
     psd_kernels  = tfp.math.psd_kernels
 
-    _rho,_psi = table_halo(cosmo,a,icm, 1e+14, 2 )[4:6]
+    rho,psi = table_halo(cosmo,a,icm, 1e+14, 2 )[4:6]
 
-    print('table rho',_rho )
-    print('table psi',_psi )# 4->rho 5->psi
+    print('table rho',rho )
+    print('table psi',psi )# 4->rho 5->psi
     
-    index_points = jnp.array([np.log10(_rho), np.log10(_psi)]).reshape([-1,2]) # rho, psi
+    index_points = jnp.array([jnp.log10(rho),jnp.log10(psi)]).reshape([-1,2]) # rho, psi
 
     model_M = tfd.GaussianProcessRegressionModel( psd_kernels.ExponentiatedQuadratic(),
                                  index_points=index_points,
-                                 observation_index_points=jnp.stack([np.log10(rho).flatten(), np.log10(psi).flatten()], axis=-1),
-                                 observations=np.log10(M).flatten(),
+                                 observation_index_points=jnp.stack([_rho, _psi], axis=-1),
+                                 observations=_M.flatten(),
                                 )
 
     model_r = tfd.GaussianProcessRegressionModel( psd_kernels.ExponentiatedQuadratic(),
                                  index_points=index_points,
-                                 observation_index_points=jnp.stack([np.log10(rho).flatten(), np.log10(psi).flatten()], axis=-1),
-                                 observations=np.log10(rx).flatten(),
+                                 observation_index_points=jnp.stack([_rho, _psi], axis=-1),
+                                 observations=_R.flatten(),
                                 )
 
     print('GPmodel', 10**(model_M.mean()), 10**model_r.mean())
-
+    
     #print('table', table_halo(cosmo,a,icm, 3.4320555e+14,2.62402334e-08 )[4:6])# 4->rho 5->psi
     #print('------------------table_icm-------------------')
     #rho = 1e-2
