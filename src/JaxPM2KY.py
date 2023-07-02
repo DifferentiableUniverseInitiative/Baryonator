@@ -40,6 +40,11 @@ class RelativeSeconds(lg.Formatter):
         #print( dtype(record.relativeCreated//(1000)) )
         return super(RelativeSeconds, self).format(record)
 
+lg.basicConfig(level = lg.WARNING)
+
+formatter = RelativeSeconds("[%(relativeCreated)s]  %(message)s")
+lg.root.handlers[0].setFormatter(formatter)
+
 
 ### input parameters (free)
 # currently this is just controlling the EDG part, later we want to also connect it to the HPM table
@@ -49,27 +54,16 @@ params_camels_optimized_extreme = jnp.array([100.93629056,100.0582693,0.46008348
 
 ### input parameters (fixed)
 
-box_size = [200.,200.,4000.]    #[200.,200.,4000.] Transverse comoving size of the simulation volume Mpc/h
-#nc = [32, 32, 64]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
-nc = [64, 64, 640]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
-
-lensplane_width = 102.5         # Width of each lensplane
-n_lens = int(box_size[-1] // lensplane_width)
-field_size = 5                  # Size of the lensing field in degrees
-field_npix = 64                # Number of pixels in the lensing field
-z_source = jnp.linspace(0,2.5,39)    # Source planes -- this needs to change
-r = jnp.linspace(0., box_size[-1], n_lens+1)
-r_center = 0.5*(r[1:] + r[:-1])
-
-z_start = 10                    # Redshift where initial conditions are generated
-a_start = 1./(1+z_start)
-
 # cosmology (can be freed if need)
 Omega_c = 0.2589
 Omega_b = 0.0486
 Omega_m = Omega_c+Omega_b
 sigma8 = 0.8159
 h = 0.7
+
+lg.warning("Setting up Cosmology")
+cosmo   = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
+cosmo2  = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
 
 G = 6.67e-11             # m^3/kg/s^2
 G = G*1.99e30            # m^3/Msun/s^2
@@ -97,20 +91,40 @@ icm['beta']   = 5.4905
 
 seed = 300
 
+# simulation setup
+
+box_size = [200.,200.,4000.]    #[200.,200.,4000.] Transverse comoving size of the simulation volume Mpc/h
+#nc = [32, 32, 64]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
+nc = [64, 64, 640]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
+lensplane_width = 200         # Width of each lensplane in Mpc/h
+n_lens = int(box_size[-1] // lensplane_width)
+r = jnp.linspace(0., box_size[-1], n_lens+1)
+r_center = 0.5*(r[1:] + r[:-1])
+print('r_center', r_center)
+
+# Retrieve the scale factor corresponding to these distances
+a = jc.background.a_of_chi(cosmo, r)
+a_center = jc.background.a_of_chi(cosmo, r_center)
+print('a_center', a_center) # from 1 to 0
+
+# Then tne step per lens plane
+stages = a_center[::-1]
+print('stages', stages) # from 0 to 1
+z_stage = 1/stages-1
+print('z stages', z_stage)
+
+z_source = jnp.linspace(0,z_stage[0],n_lens)    # Source planes 
+field_size = (box_size[0]/jc.background.angular_diameter_distance(cosmo, a[-1]))/np.pi*180.0/3   # FOV in degree
+field_npix = 64    # Number of pixels in the lensing field and tSZ map
+print('field size', field_size)
+
 
 # if we want to ignore some dynamical parameters in the functions
 #from functools import partial
 #@partial(jax.jit, static_argnums=[2])
 
-@jax.jit
+#@jax.jit
 def create_nbody(cosmo, cosmo2):
-
-    # Retrieve the scale factor corresponding to these distances
-    a = jc.background.a_of_chi(cosmo, r)
-    a_center = jc.background.a_of_chi(cosmo, r_center)
-
-    # Then one step per lens plane
-    stages = a_center[::-1]
 
     # Create a small function to generate the matter power spectrum
     k = jnp.logspace(-4, 1, 128)
@@ -124,16 +138,17 @@ def create_nbody(cosmo, cosmo2):
     particles = jnp.stack(jnp.meshgrid(*[jnp.arange(s) for s in nc]),axis=-1).reshape([-1,3])
 
     # Initial displacement (need to redefine cosmo?)
-    dx, p, f = lpt(cosmo2, initial_conditions, particles, a_start)
+    dx, p, f = lpt(cosmo2, initial_conditions, particles, 0.1)
 
     # Evolve the simulation forward
     res = odeint(make_ode_fn(nc), [particles+dx, p],
-             jnp.concatenate([jnp.atleast_1d(a_start), stages]), cosmo, rtol=1e-5, atol=1e-5)
-
-    return res, a_center
+             jnp.concatenate([jnp.atleast_1d(0.1), stages]), cosmo, rtol=1e-5, atol=1e-5)
+    # res is ordered high to low redshift
+    
+    return res
 
 @jax.jit
-def calculat_Msun_per_particle(particle_list, a_center, cosmo):
+def calculat_Msun_per_particle(particle_list, cosmo):
     Msun_per_particle = []
     Rho_m_mean = []
     rho_crit = 8.5 * 10**-27 #kg/m3 # replace with cosmology object
@@ -141,7 +156,7 @@ def calculat_Msun_per_particle(particle_list, a_center, cosmo):
     for i in range(len(particle_list)):
 
         # rho_m_mean in kg/m^3
-        rho_m_mean = rho_crit*jc.background.Omega_m_a(cosmo, a_center[i])
+        rho_m_mean = rho_crit*jc.background.Omega_m_a(cosmo, stages[i])
         # rho_m_mean in (Msun/h)/(Mpc/h)^3
         rho_m_mean = rho_m_mean *(3.086*10**22/h)**3 * (1.989*10**30/h)**(-1)  
 
@@ -317,9 +332,10 @@ def EGD_move_particles(res, i):
 
     """
     input particle list, output moved particle list as well as the total mass field on a mesh
+    now we want to go from low to high redshift so flip res
     """
 
-    Nparticles  = len(res[0][i])
+    Nparticles  = len(res[0][::-1][i])
     inds        = jax.random.shuffle(jax.random.PRNGKey(seed), jnp.arange(0,Nparticles-1))
     split       = int(Omega_b/Omega_m*Nparticles)
     egd_pos_gas = res[0][i][inds[:split]]
@@ -327,12 +343,12 @@ def EGD_move_particles(res, i):
 
     # may be able to remove some of these that are not used later
     lg.warning("---- CIC painting")
-    total_mass_dmo  = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), res[0][i])
+    total_mass_dmo  = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), res[0][::-1][i])
     total_delta_dmo = total_mass_dmo/total_mass_dmo.mean() - 1
     egd_rho_dm      = cic_paint(jnp.zeros((nc[0],nc[1],nc[2])), egd_pos_dm) # this is still in number of particles
 
     total_particles_egd = cic_paint(egd_rho_dm, egd_pos_gas + egd_correction(total_delta_dmo, egd_pos_gas, params_camels_optimized))
-    total_mass_egd      = total_particles_egd * Msun_per_particle[i]
+    total_mass_egd      = total_particles_egd * Msun_per_particle[::-1][i]
 
     return jnp.concatenate((egd_pos_dm, egd_pos_gas + egd_correction(total_delta_dmo, egd_pos_gas, params_camels_optimized))), total_mass_egd
 
@@ -364,11 +380,11 @@ def lookup_HPM(particles, total_mass_egd):
         
     if GPHPM==True: 
         lg.warning("---- Interpolating T/P values")
-        Tf,Pf = HPM_GPmodel(rho_pos, fscalar_pos, a_center[i])
+        Tf,Pf = HPM_GPmodel(rho_pos, fscalar_pos, stages[i])
 
     return Tf, Pf
 
-@jax.jit
+#@jax.jit
 def tsz_Born(cosmo,
             pressure_planes,
             coords,
@@ -388,22 +404,25 @@ def tsz_Born(cosmo,
     # Compute constant prefactor:
     constant_factor = 1./1e9 * sigT/(3.0886e22)**2 /me*1.99e30 *(1000)**2/c**2*h 
 
+    Tsz = []
     tsz = 0
     for entry in pressure_planes:
-      r = entry['r']; a = entry['a']; p = entry['plane']
-      dx = entry['dx']; dz = entry['dz']
-      # Normalize density planes
-      normalization = dz * r / a
-      p = p * constant_factor * normalization
+        r = entry['r']; a = entry['a']; p = entry['plane']
+        dx = entry['dx']; dz = entry['dz']
+        # Normalize density planes
+        normalization = dz * r / a
 
-      # Interpolate at the density plane coordinates
-      im = map_coordinates(p, 
+        p = p * constant_factor * normalization
+
+        # Interpolate at the density plane coordinates
+        im = map_coordinates(p, 
                          coords * r / dx - 0.5, 
                          order=1, mode="wrap")
 
-    tsz += im 
+        tsz += im 
+        Tsz.append(tsz)
 
-    return tsz
+    return Tsz
 
 def pressure_plane(positions, p,
                   box_shape,
@@ -424,8 +443,9 @@ def pressure_plane(positions, p,
     xy = xy / nx * plane_resolution
 
     # Selecting only particles that fall inside the volume of interest
-    weight = jnp.where((d > (center - width / 2)) & (d <= (center + width / 2)), 1., 0.) * p
+    weight = jnp.where((d > (center - width / 2)) & (d <= (center + width / 2)), 1., 0.)*p
     # Painting density plane
+    #p_plane = cic_paint_2d(jnp.zeros([plane_resolution, plane_resolution]), xy, weight) * cic_paint_2d(jnp.zeros([plane_resolution, plane_resolution]), xy, p)
     p_plane = cic_paint_2d(jnp.zeros([plane_resolution, plane_resolution]), xy, weight)
 
     # Apply density normalization
@@ -450,13 +470,6 @@ GPHPM = args.GPHPM
 if GPHPM==False:
     intpT, intpP = make_HPM_table_interpolator()
 
-
-lg.basicConfig(level = lg.WARNING)
-
-formatter = RelativeSeconds("[%(relativeCreated)s]  %(message)s")
-lg.root.handlers[0].setFormatter(formatter)
-
-
 lg.warning("Generating xygrid and corresponding radec grid for final observables")
 
 xgrid, ygrid = np.meshgrid(np.linspace(0, field_size, field_npix, endpoint=False), # range of X coordinates
@@ -465,23 +478,20 @@ xgrid, ygrid = np.meshgrid(np.linspace(0, field_size, field_npix, endpoint=False
 coords  = np.stack([xgrid, ygrid], axis=0)*u.deg
 coords2 = coords.reshape([2, -1]).T.to(u.rad)
 
-lg.warning("Setting up Cosmology")
-cosmo   = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
-cosmo2  = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
-
 lg.warning("Creating Nbody, returning sim and array of scalefactos")
-res, a_center = create_nbody(cosmo, cosmo2)
+res = create_nbody(cosmo, cosmo2)
 # np.savez('res.npz', res=res)
 
 lg.warning("Computing Msun per particle and rhom")
-Msun_per_particle, Rho_m_mean = calculat_Msun_per_particle(res[0], a_center, cosmo)
+Msun_per_particle, Rho_m_mean = calculat_Msun_per_particle(res[0], cosmo)
 
 lg.warning("Making density and pressure planes")
 
 lensplanes    = []
-pressureplane = []
+pressureplanes = []
 
 for i in range(n_lens):
+    # low to high redshift
 
     lg.warning("-- Processing lenplane %d"%i)
 
@@ -503,9 +513,10 @@ for i in range(n_lens):
                               plane_resolution=field_npix   )
     # np.savez('dp_'+str(i)+'.npz', dp=dp)
 
+    # this flips back to low to high redshift
     lensplanes.append(
-                      {'r'    : r_center[i],
-                       'a'    : a_center[::-1][i],
+            {'r'    : r_center[i],
+                'a'    : stages[::-1][i],
                        'plane': dp,
                        'dx'   : box_size[0]/nc[0],
                        'dz'   : lensplane_width
@@ -522,9 +533,9 @@ for i in range(n_lens):
                               plane_resolution=field_npix)
     # np.savez('pp_'+str(i)+'.npz', pp=pp)
 
-    pressureplane.append(
-                         {'r'    : r_center[i],
-                          'a'    : a_center[::-1],
+    pressureplanes.append(
+            {'r'    : r_center[i],
+                'a'    : stages[::-1][i],
                           'plane': pp,
                           'dx'   : box_size[0]/nc[0],
                           'dz'   : lensplane_width
@@ -540,13 +551,13 @@ kappa = convergence_Born(cosmo,
 
 lg.warning("Integrating along the line of sight -- Compton y")
 y = tsz_Born(cosmo,
-             lensplanes,
+             pressureplanes,
              coords=jnp.array(coords2).T.reshape(2,field_npix,field_npix),
              z_source=z_source)
 
 
 np.savez('kappa.npz', kappa=kappa, z=z_source)
-np.savez('y.npz', y=y, z=1./a_center-1)
+np.savez('y.npz', y=y, z=z_source)
 
 end = time()
 
