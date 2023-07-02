@@ -93,10 +93,10 @@ seed = 300
 
 # simulation setup
 
-box_size = [200.,200.,3000.]    #[200.,200.,4000.] Transverse comoving size of the simulation volume Mpc/h
+box_size = [200.,200.,4000.]    #[200.,200.,4000.] Transverse comoving size of the simulation volume Mpc/h
 #nc = [32, 32, 64]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
 nc = [64, 64, 640]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
-lensplane_width = 100         # Width of each lensplane in Mpc/h
+lensplane_width = 200         # Width of each lensplane in Mpc/h
 n_lens = int(box_size[-1] // lensplane_width)
 r = jnp.linspace(0., box_size[-1], n_lens+1)
 r_center = 0.5*(r[1:] + r[:-1])
@@ -404,23 +404,25 @@ def tsz_Born(cosmo,
     # Compute constant prefactor:
     constant_factor = 1./1e9 * sigT/(3.0886e22)**2 /me*1.99e30 *(1000)**2/c**2*h 
 
+    Tsz = []
     tsz = 0
     for entry in pressure_planes:
-      r = entry['r']; a = entry['a']; p = entry['plane']
-      dx = entry['dx']; dz = entry['dz']
-      # Normalize density planes
-      normalization = dz * r / a
+        r = entry['r']; a = entry['a']; p = entry['plane']
+        dx = entry['dx']; dz = entry['dz']
+        # Normalize density planes
+        normalization = dz * r / a
 
-      p = p * constant_factor * normalization
+        p = p * constant_factor * normalization
 
-      # Interpolate at the density plane coordinates
-      im = map_coordinates(p, 
+        # Interpolate at the density plane coordinates
+        im = map_coordinates(p, 
                          coords * r / dx - 0.5, 
                          order=1, mode="wrap")
 
-    tsz += im 
+        tsz += im 
+        Tsz.append(tsz)
 
-    return tsz
+    return Tsz
 
 def pressure_plane(positions, p,
                   box_shape,
