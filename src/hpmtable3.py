@@ -606,8 +606,8 @@ if __name__ == "__main__":
     # Compute grid using jitted function
     batched_r  = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
     batched_Mr = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
-    m_grid     = jnp.logspace(8,16,100)# Msun
-    r_grid     = jnp.linspace(0.1,4,100)# unitless, to be multiplied by R200c 
+    m_grid     = jnp.logspace(11,16,5)# Msun
+    r_grid     = jnp.linspace(0.1,4,6)# unitless, to be multiplied by R200c 
     res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
 
     tabM,tabrx,tabs,tabx,tabrho,tabpsi,tabT,tabP = res 
@@ -623,7 +623,8 @@ if __name__ == "__main__":
     #_T      = (tabT).flatten()
     #_P      = (tabP).flatten()
 
-    import tensorflow_probability as tfp; tfp = tfp.substrates.jax
+    import tensorflow_probability as tfp;
+    tfp = tfp.substrates.jax
     tfb = tfp.bijectors
     tfd = tfp.distributions
     psd_kernels  = tfp.math.psd_kernels
@@ -635,20 +636,32 @@ if __name__ == "__main__":
     
     index_points = jnp.array([jnp.log10(rho),jnp.log10(psi)]).reshape([-1,2]) # rho, psi
 
+    print('index_point finite?',  np.all(np.isfinite(index_points)))
+    print('_rho finite?',  np.all(np.isfinite(_rho)))
+    print('_psi finite?',  np.all(np.isfinite(_psi)))
+    print('_M finite?',  np.all(np.isfinite(index_points)))
+
     model_M = tfd.GaussianProcessRegressionModel( psd_kernels.ExponentiatedQuadratic(),
                                  index_points=index_points,
                                  observation_index_points=jnp.stack([_rho, _psi], axis=-1),
                                  observations=_M.flatten(),
                                 )
 
-    model_r = tfd.GaussianProcessRegressionModel( psd_kernels.ExponentiatedQuadratic(),
+    model_r = tfd.GaussianProcessRegressionModel( psd_kernels.RationalQuadratic(),
                                  index_points=index_points,
                                  observation_index_points=jnp.stack([_rho, _psi], axis=-1),
                                  observations=_R.flatten(),
                                 )
 
     print('GPmodel', 10**(model_M.mean()), 10**model_r.mean())
-    
+     
+    np.save('rho.npy',rho)
+    np.save('psi.npy',psi)
+    np.save('_rho.npy',_rho)
+    np.save('_psi.npy',_psi)
+    np.save('_M.npy',_M)
+    np.save('_R.npy',_R)
+
     #print('table', table_halo(cosmo,a,icm, 3.4320555e+14,2.62402334e-08 )[4:6])# 4->rho 5->psi
     #print('------------------table_icm-------------------')
     #rho = 1e-2
