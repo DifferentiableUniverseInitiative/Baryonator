@@ -1,34 +1,28 @@
-
-from time import time
-
-start = time()
-import logging as lg
-import jax
+from jax import config
+config.update("jax_enable_x64", False)
+import jax,pdb
 import jax.numpy as jnp
 import jax_cosmo as jc
+import logging as lg
 import argparse
+import tensorflow_probability as tfp
+import numpy as np
+import astropy.units as u
+
+from time import time
 from jax.experimental.ode import odeint
 from jaxpm.painting import cic_paint, cic_paint_2d, cic_read, compensate_cic
 from jaxpm.pm import linear_field, lpt, make_ode_fn
 from jaxpm.lensing import density_plane, convergence_Born
 from jaxpm.kernels import fftk, gradient_kernel, laplace_kernel, longrange_kernel
 from jax.scipy.ndimage import map_coordinates
-
-import tensorflow_probability as tfp
+from scipy.interpolate import RegularGridInterpolator
 from tensorflow.python.ops.numpy_ops import np_config
 np_config.enable_numpy_behavior()
 
-from hpmtable2 import *
+from hpmtable3 import *
 
-import numpy as np
-import pdb
-
-# this needs to be jaxed
-from scipy.interpolate import RegularGridInterpolator
-import astropy.units as u
-
-from jax import config
-config.update("jax_enable_x64", True)
+start = time()
 
 
 class RelativeSeconds(lg.Formatter):
@@ -315,14 +309,19 @@ def HPM_GPmodel(rho,psi,a,logMmin=8,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
                                                   index_points=index_points,
                                                   observation_index_points=jnp.stack([_rho,_psi], axis=1),
                                                   observations=_T,
+                                                  jitter=1e-03
+
                                                  )
 
     model_P = tfd.GaussianProcessRegressionModel( kern,
                                                   index_points=index_points,
                                                   observation_index_points=jnp.stack([_rho,_psi], axis=1),
                                                   observations=_P,
+                                                  jitter=1e-03
                                                 )
+    print(_T,_P)
     del _rho,_psi,_T,_P
+    #print(_T,_P)
 
     return np.asarray(10**model_T.mean()), np.asarray(10**model_P.mean())
 
@@ -367,7 +366,7 @@ def lookup_HPM(particles, total_mass_egd):
     F_fscalar  = 2*jnp.pi**2*G*F_rhom/kg # m^3/kg/s^2 (Msun/h)/(Mpc/h)^2  
     R_fscalar  = jnp.fft.ifftn(jnp.fft.ifftshift(F_fscalar)) 
     R_fscalar -= jnp.min(R_fscalar.real)  
-    R_fscalar  = R_fscalar * (10**(-3))**3 * (1.989* 10**30 / h)  * 3.1536 * 10**16 / (3.086*10**19/h)**2 
+    R_fscalar  = R_fscalar/h*(1.989e30/3.086e+22)/3.086e+22*100 # * (10**(-3))**3 * (1.989* 10**30 / h)  * 3.1536 * 10**16 / (3.086*10**19/h)**2 
 
     # get rho and f scalar on each particle
     fscalar_pos = cic_read(R_fscalar.real, particles)
@@ -380,8 +379,8 @@ def lookup_HPM(particles, total_mass_egd):
         
     if GPHPM==True: 
         lg.warning("---- Interpolating T/P values")
-        Tf,Pf = HPM_GPmodel(rho_pos, fscalar_pos, stages[i])
-
+        Tf,Pf = HPM_GPmodel(rho_pos, fscalar_pos, stages[i],logMmin=11,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20)
+    
     return Tf, Pf
 
 #@jax.jit
