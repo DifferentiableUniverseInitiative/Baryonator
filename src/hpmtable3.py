@@ -606,8 +606,10 @@ if __name__ == "__main__":
     # Compute grid using jitted function
     batched_r  = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
     batched_Mr = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
-    m_grid     = jnp.logspace(11,16,5)# Msun
-    r_grid     = jnp.linspace(0.1,4,6)# unitless, to be multiplied by R200c 
+    m_grid     = jnp.logspace(11,16,20)# Msun
+    #r_grid     = jnp.logspace(np.log10(0.1),np.log10(4),20)# unitless, to be multiplied by R200c 
+    r_grid     = jnp.linspace(0.1,4,20)# unitless, to be multiplied by R200c 
+    
     res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
 
     tabM,tabrx,tabs,tabx,tabrho,tabpsi,tabT,tabP = res 
@@ -645,12 +647,14 @@ if __name__ == "__main__":
                                  index_points=index_points,
                                  observation_index_points=jnp.stack([_rho, _psi], axis=-1),
                                  observations=_M.flatten(),
+                                 jitter=1e-03
                                 )
 
     model_r = tfd.GaussianProcessRegressionModel( psd_kernels.RationalQuadratic(),
                                  index_points=index_points,
                                  observation_index_points=jnp.stack([_rho, _psi], axis=-1),
                                  observations=_R.flatten(),
+                                 jitter=1e-03
                                 )
 
     print('GPmodel', 10**(model_M.mean()), 10**model_r.mean())
