@@ -5,7 +5,8 @@ import jax.numpy as jnp
 import jax_cosmo as jc
 import logging as lg
 import argparse
-import tensorflow_probability as tfp
+#import tensorflow_probability as tfp
+from tensorflow_probability.substrates import jax as tfp
 import numpy as np
 import astropy.units as u
 
@@ -42,34 +43,32 @@ lg.root.handlers[0].setFormatter(formatter)
 
 ### input parameters (free)
 # currently this is just controlling the EDG part, later we want to also connect it to the HPM table
-
-params_camels_optimized = jnp.array([0.93629056,2.0582693,0.46008348])
+params_camels_optimized         = jnp.array([0.93629056,2.0582693,0.46008348])
 params_camels_optimized_extreme = jnp.array([100.93629056,100.0582693,0.46008348])
 
 ### input parameters (fixed)
 
 # cosmology (can be freed if need)
+lg.warning("Setting up Cosmology")
+h       = 0.7
+sigma8  = 0.8159
 Omega_c = 0.2589
 Omega_b = 0.0486
 Omega_m = Omega_c+Omega_b
-sigma8 = 0.8159
-h = 0.7
 
-lg.warning("Setting up Cosmology")
 cosmo   = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
 cosmo2  = jc.Planck15(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8, h=h)
 
+# Constants
 G = 6.67e-11             # m^3/kg/s^2
 G = G*1.99e30            # m^3/Msun/s^2
 G = G/(3.086e22)**2/1000 # (km)(Mpc^2)/Msun/s^2
 G = G*3.15e16            # (km)(Mpc^2)/Msun/s/Gyr
 
-# gas parameters
-sigT  = 6.65e-29 # m^2
-me    = 9.11e-31 # kg
-c     = 3e8      # m^2/s^2
-
-mH_cgs   = 1.67223e-24
+sigT   = 6.65e-29 # m^2
+me     = 9.11e-31 # kg
+c      = 3e8      # m^2/s^2
+mH_cgs = 1.67223e-24
 
 icm = {}
 icm['XH']     = 0.76
@@ -85,21 +84,19 @@ icm['beta']   = 5.4905
 
 seed = 300
 
-# simulation setup
-
-box_size = [200.,200.,4000.]    #[200.,200.,4000.] Transverse comoving size of the simulation volume Mpc/h
-#nc = [32, 32, 64]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
-nc = [64, 64, 640]             #[64, 64, 1280.] Number of transverse voxels in the simulation volume
-lensplane_width = 200         # Width of each lensplane in Mpc/h
-n_lens = int(box_size[-1] // lensplane_width)
-r = jnp.linspace(0., box_size[-1], n_lens+1)
-r_center = 0.5*(r[1:] + r[:-1])
+# -------------- simulation setup --------------------
+box_size = [256.,256.,4096.]                   # [200.,200.,4000.] Transverse comoving size of the simulation volume Mpc/h
+nc = [64, 64, 256]                             # [64, 64, 1280.] Number of transverse voxels in the simulation volume
+lensplane_width = 128                          # Width of each lensplane in Mpc/h
+n_lens = int(box_size[-1] // lensplane_width)  # Number of lens planes define by the width 
+r = jnp.linspace(0., box_size[-1], n_lens+1)   # Comoving radial distance [Mpc/h] to the slice edges
+r_center = 0.5*(r[1:] + r[:-1])                # Comoving radial distance [MPc/h] to the slice center
 print('r_center', r_center)
 
 # Retrieve the scale factor corresponding to these distances
-a = jc.background.a_of_chi(cosmo, r)
-a_center = jc.background.a_of_chi(cosmo, r_center)
-print('a_center', a_center) # from 1 to 0
+a        = jc.background.a_of_chi(cosmo, r)         # Scale factors to edges
+a_center = jc.background.a_of_chi(cosmo, r_center)  # Scale factors to center of slices
+print('a_center', a_center)                         # from 1 to 0
 
 # Then tne step per lens plane
 stages = a_center[::-1]
@@ -107,8 +104,9 @@ print('stages', stages) # from 0 to 1
 z_stage = 1/stages-1
 print('z stages', z_stage)
 
-z_source = jnp.linspace(0,z_stage[0],n_lens)    # Source planes 
-field_size = (box_size[0]/jc.background.angular_diameter_distance(cosmo, a[-1]))/np.pi*180.0/3   # FOV in degree
+z_source   = jnp.linspace(0,z_stage[0],n_lens)    # Source planes 
+field_size = (box_size[0]/jc.background.radial_comoving_distance(cosmo, a[-1]))/np.pi*180.0   # FOV in degree
+#field_size = (box_size[0]/jc.background.angular_diameter_distance(cosmo, a[-1]))/np.pi*180.0/3   # FOV in degree
 field_npix = 64    # Number of pixels in the lensing field and tSZ map
 print('field size', field_size)
 
@@ -142,23 +140,41 @@ def create_nbody(cosmo, cosmo2):
     return res
 
 @jax.jit
-def calculat_Msun_per_particle(particle_list, cosmo):
+def calculat_Msun_per_particle(cosmo, particle_list):
+    '''
+    Return the mass per particle for each particle type.
+
+    Parameters
+    ----------
+    cosmo:
+      jax cosmo instance
+    particle_list: 
+      list of particles. List constains particles for all lens slices.
+      The number of lists equals to L_z/lensplane_width+1
+
+    Returns
+    -------
+    Msun_per_particle: float
+      Mass per particle in Msun
+    Rho_m_mean: float
+      Mean matter density Msun/Mpc^3
+    '''
+
     Msun_per_particle = []
-    Rho_m_mean = []
-    rho_crit = 8.5 * 10**-27 #kg/m3 # replace with cosmology object
+    Rho_m_mean        = []
+    #rho_crit0         = jc.constants.rhocrit
 
     for i in range(len(particle_list)):
 
-        # rho_m_mean in kg/m^3
-        rho_m_mean = rho_crit*jc.background.Omega_m_a(cosmo, stages[i])
-        # rho_m_mean in (Msun/h)/(Mpc/h)^3
-        rho_m_mean = rho_m_mean *(3.086*10**22/h)**3 * (1.989*10**30/h)**(-1)  
-
-        Mpart = rho_m_mean * box_size[0] * box_size[1] * box_size[2] / len(particle_list[i])
+        #jc.background.H(cosmo,stages[i]) returns units of 100h(km/s)/(Mpc)
+        rho_crit_a = 3*(jc.background.H(cosmo,stages[i])*cosmo.h)**2/8/jnp.pi/G_si*(3.086/1.989)*1000**3*1e-11 # [Msun/Mpc^3]
+        rho_m_mean = rho_crit_a*jc.background.Omega_m_a(cosmo, stages[i])
+        Mpart      = rho_m_mean * box_size[0] * box_size[1] * box_size[2] / len(particle_list[i])
     
         Msun_per_particle.append(Mpart)
         Rho_m_mean.append(rho_m_mean)
-
+        #print(Mpart,rho_m_mean)
+        #pdb.set_trace()
     return Msun_per_particle, Rho_m_mean
 
 
@@ -253,7 +269,7 @@ def make_HPM_table_interpolator():
     return intpT, intpP
 
 # @jax.jit
-def HPM_GPmodel(rho,psi,a,logMmin=8,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
+def HPM_GPmodel(rho,psi,a,logMmin=11,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
     """Takes rho and psi and extracts the inverse mapping via
        HPM table to predict the value of T & P.
 
@@ -282,7 +298,7 @@ def HPM_GPmodel(rho,psi,a,logMmin=8,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
     
 
     # Locations to interpolate AT 
-    index_points = jnp.array([np.log10(rho), np.log10(psi)]).reshape([-1,2])
+    index_points = jnp.array([jnp.log10(rho), jnp.log10(psi)]).reshape([-1,2])
     
     # First construct a table to map M/r -> rho/psi
     batched_r  = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
@@ -292,23 +308,28 @@ def HPM_GPmodel(rho,psi,a,logMmin=8,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
     r_grid     = jnp.linspace(rmin,rmax,Nr)       # unitless, to be multiplied by R200c
     res        = batched_Mr(cosmo,a,icm, m_grid.flatten(), r_grid.flatten())
     del batched_Mr, m_grid, r_grid
-    tabM,tabrx,_,_,tabrho,tabpsi,tabT,tabP = res
+    tabM,tabR,_,_,tabrho,tabpsi,tabT,tabP = res
     del res
 
     # Use GP to make an interpolate to apply a reverse mapping
     tfb     = tfp.bijectors
     tfd     = tfp.distributions
     kern    = tfp.math.psd_kernels.ExponentiatedQuadratic()
+    #kern    = tfp.math.psd_kernels.AutoCompositeTensorPsdKernel(2)
 
-    _rho    = np.log10(tabrho).flatten() 
-    _psi    = np.log10(tabpsi).flatten()
-    _T      = np.log10(tabT).flatten()
-    _P      = np.log10(tabP).flatten()
+    _rho    = jnp.log10(tabrho).flatten(); del tabrho
+    _psi    = jnp.log10(tabpsi).flatten(); del tabpsi
+    _T      = jnp.log10(tabT).flatten()  ; del tabT
+    _P      = jnp.log10(tabP).flatten()  ; del tabP
+    _M      = jnp.log10(tabM).flatten()  ; del tabM
+    _R      = jnp.log10(tabR).flatten()  ; del tabR
+
+    print(jnp.max(_rho),jnp.max(_psi),jnp.max(_T),jnp.max(_P))
 
     model_T = tfd.GaussianProcessRegressionModel( kern,
                                                   index_points=index_points,
                                                   observation_index_points=jnp.stack([_rho,_psi], axis=1),
-                                                  observations=_T,
+                                                  observations=_M,
                                                   jitter=1e-03
 
                                                  )
@@ -316,14 +337,18 @@ def HPM_GPmodel(rho,psi,a,logMmin=8,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
     model_P = tfd.GaussianProcessRegressionModel( kern,
                                                   index_points=index_points,
                                                   observation_index_points=jnp.stack([_rho,_psi], axis=1),
-                                                  observations=_P,
+                                                  observations=_R,
                                                   jitter=1e-03
                                                 )
-    print(_T,_P)
-    del _rho,_psi,_T,_P
+    #print('--------------------',model_T.mean())
+    #pdb.set_trace()
     #print(_T,_P)
+    del _rho,_psi,_T,_P
+    TT=model_T.mean()
+    PP=model_P.mean()
+    print(TT,PP)
 
-    return np.asarray(10**model_T.mean()), np.asarray(10**model_P.mean())
+    return np.asarray(10**TT), np.asarray(10**PP)
 
 
 
@@ -367,6 +392,7 @@ def lookup_HPM(particles, total_mass_egd):
     R_fscalar  = jnp.fft.ifftn(jnp.fft.ifftshift(F_fscalar)) 
     R_fscalar -= jnp.min(R_fscalar.real)  
     R_fscalar  = R_fscalar/h*(1.989e30/3.086e+22)/3.086e+22*100 # * (10**(-3))**3 * (1.989* 10**30 / h)  * 3.1536 * 10**16 / (3.086*10**19/h)**2 
+    del F_rhom,kg,F_fscalar
 
     # get rho and f scalar on each particle
     fscalar_pos = cic_read(R_fscalar.real, particles)
@@ -379,8 +405,10 @@ def lookup_HPM(particles, total_mass_egd):
         
     if GPHPM==True: 
         lg.warning("---- Interpolating T/P values")
-        Tf,Pf = HPM_GPmodel(rho_pos, fscalar_pos, stages[i],logMmin=11,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20)
-    
+        #print(rho_pos, fscalar_pos)
+        #pdb.set_trace()
+        Tf,Pf = HPM_GPmodel(rho_pos, fscalar_pos, stages[i])
+        #print(Tf,Pf)
     return Tf, Pf
 
 #@jax.jit
@@ -482,8 +510,8 @@ res = create_nbody(cosmo, cosmo2)
 # np.savez('res.npz', res=res)
 
 lg.warning("Computing Msun per particle and rhom")
-Msun_per_particle, Rho_m_mean = calculat_Msun_per_particle(res[0], cosmo)
-
+Msun_per_particle, Rho_m_mean = calculat_Msun_per_particle(cosmo,res[0])
+#print(Msun_per_particle, Rho_m_mean)
 lg.warning("Making density and pressure planes")
 
 lensplanes    = []
