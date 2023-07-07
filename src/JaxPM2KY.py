@@ -1,5 +1,5 @@
 from jax import config
-config.update("jax_enable_x64", False)
+config.update("jax_enable_x64", True)
 import jax,pdb
 import jax.numpy as jnp
 import jax_cosmo as jc
@@ -269,14 +269,14 @@ def make_HPM_table_interpolator():
     return intpT, intpP
 
 # @jax.jit
-def HPM_GPmodel(rho,psi,a,logMmin=11,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
-    """Takes rho and psi and extracts the inverse mapping via
+def HPM_GPmodel(cosmo,a,delta,psi,logMmin=11,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
+    """Takes delta (overdensity) and psi (fscalar) and extracts the inverse mapping via
        HPM table to predict the value of T & P.
 
     Parameters
     ----------
-    rho     : float, arr
-     density values 
+    delta     : float, arr
+     overdensity values (rho_m-<rho_m>)/<rho_m>
     psi     : float, arr
      fscalar valaues
     a       : float
@@ -298,7 +298,7 @@ def HPM_GPmodel(rho,psi,a,logMmin=11,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
     
 
     # Locations to interpolate AT 
-    index_points = jnp.array([jnp.log10(rho), jnp.log10(psi)]).reshape([-1,2])
+    index_points = jnp.array([delta, jnp.log10(psi)]).T#.reshape([-1,2])
     
     # First construct a table to map M/r -> rho/psi
     batched_r  = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
@@ -311,43 +311,49 @@ def HPM_GPmodel(rho,psi,a,logMmin=11,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
     tabM,tabR,_,_,tabrho,tabpsi,tabT,tabP = res
     del res
 
+    #Compute mean matter density in Msun/Mpc^3 to convert rho->delta
+    rhom0    = jc.background.Omega_m_a(cosmo,1.0)*jc.constants.rhocrit/cosmo.h**2 # [(M_sun)/ (Mpc)^{3}]
+    rhommean = rhom0*(a)**-3
+
     # Use GP to make an interpolate to apply a reverse mapping
     tfb     = tfp.bijectors
     tfd     = tfp.distributions
     kern    = tfp.math.psd_kernels.ExponentiatedQuadratic()
     #kern    = tfp.math.psd_kernels.AutoCompositeTensorPsdKernel(2)
 
-    _rho    = jnp.log10(tabrho).flatten(); del tabrho
+    _delta  = (tabrho/rhommean).flatten(); del tabrho
+    #_delta  = jnp.log10(tabrho).flatten(); del tabrho
     _psi    = jnp.log10(tabpsi).flatten(); del tabpsi
     _T      = jnp.log10(tabT).flatten()  ; del tabT
     _P      = jnp.log10(tabP).flatten()  ; del tabP
     _M      = jnp.log10(tabM).flatten()  ; del tabM
     _R      = jnp.log10(tabR).flatten()  ; del tabR
-
-    print(jnp.max(_rho),jnp.max(_psi),jnp.max(_T),jnp.max(_P))
-
+    print(jnp.max(_delta),jnp.max(_psi),jnp.max(_T),jnp.max(_P))
+    
     model_T = tfd.GaussianProcessRegressionModel( kern,
                                                   index_points=index_points,
-                                                  observation_index_points=jnp.stack([_rho,_psi], axis=1),
+                                                  observation_index_points=jnp.stack([_delta,_psi], axis=1),
                                                   observations=_T,
-                                                  jitter=1e-03
+                                                  #jitter=5e-03
 
                                                  )
 
     model_P = tfd.GaussianProcessRegressionModel( kern,
                                                   index_points=index_points,
-                                                  observation_index_points=jnp.stack([_rho,_psi], axis=1),
+                                                  observation_index_points=jnp.stack([_delta,_psi], axis=1),
                                                   observations=_P,
-                                                  jitter=1e-03
+                                                  #jitter=5e-03
                                                 )
+    
+    ##############################################
     #print('--------------------',model_T.mean())
     #pdb.set_trace()
     #print(_T,_P)
-    del _rho,_psi,_T,_P
+    #del _delta,_psi,_T,_P
     TT=model_T.mean()
     PP=model_P.mean()
-    print(TT,PP)
-
+    print(np.max(TT),np.max(PP))
+    #pdb.set_trace()
     return np.asarray(10**TT), np.asarray(10**PP)
 
 
@@ -377,7 +383,7 @@ def EGD_move_particles(res, i):
     return jnp.concatenate((egd_pos_dm, egd_pos_gas + egd_correction(total_delta_dmo, egd_pos_gas, params_camels_optimized))), total_mass_egd
 
 
-def lookup_HPM(particles, total_mass_egd):
+def lookup_HPM(cosmo,a,particles, total_mass_egd):
     """
     Given particle positions and total mass mesh, calculate f scalar and rho/rho_m to get T and P grid, 
     interpolate the T and P values onto the particle grid and return a list of T and P according to the 
@@ -395,19 +401,21 @@ def lookup_HPM(particles, total_mass_egd):
     del F_rhom,kg,F_fscalar
 
     # get rho and f scalar on each particle
+    # Note here that rho means (rho_m - <rho_m>)/<rho_m> not mass per Mpc^3
     fscalar_pos = cic_read(R_fscalar.real, particles)
-    rho_pos = cic_read(total_mass_egd/np.mean(total_mass_egd), particles)
+    delta_pos   = cic_read(total_mass_egd/np.mean(total_mass_egd), particles) # (rho-avg)/avg
 
     if GPHPM==False:
         lg.warning("---- Interpolating T/P values")
-        Tf = intpT( jnp.c_[fscalar_pos, rho_pos])
-        Pf = intpP( jnp.c_[fscalar_pos, rho_pos])
+        Tf = intpT( jnp.c_[fscalar_pos, delta_pos])
+        Pf = intpP( jnp.c_[fscalar_pos, delta_pos])
         
     if GPHPM==True: 
         lg.warning("---- Interpolating T/P values")
         #print(rho_pos, fscalar_pos)
         #pdb.set_trace()
-        Tf,Pf = HPM_GPmodel(rho_pos, fscalar_pos, stages[i])
+        Tf,Pf = HPM_GPmodel(cosmo,a,delta_pos, fscalar_pos)
+        #HPM_GPmodel(cosmo,a,delta,psi,logMmin=9,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20)
         #print(Tf,Pf)
     return Tf, Pf
 
@@ -551,7 +559,9 @@ for i in range(n_lens):
                      )
 
     lg.warning("---- Adding pressure plane ")
-    Tf, Pf = lookup_HPM(particles_moved, total_mass_egd)
+    #pdb.set_trace()
+    Tf, Pf = lookup_HPM(cosmo,stages[::-1][i],particles_moved, total_mass_egd)
+    print(Tf,Pf)
     # np.savez('TP.npz', T=Tf, P=Pf)
     pp = pressure_plane(particles_moved, Pf,
                               nc,
