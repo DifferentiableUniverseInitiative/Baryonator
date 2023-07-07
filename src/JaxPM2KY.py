@@ -329,7 +329,7 @@ def HPM_GPmodel(rho,psi,a,logMmin=11,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
     model_T = tfd.GaussianProcessRegressionModel( kern,
                                                   index_points=index_points,
                                                   observation_index_points=jnp.stack([_rho,_psi], axis=1),
-                                                  observations=_M,
+                                                  observations=_T,
                                                   jitter=1e-03
 
                                                  )
@@ -337,7 +337,7 @@ def HPM_GPmodel(rho,psi,a,logMmin=11,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
     model_P = tfd.GaussianProcessRegressionModel( kern,
                                                   index_points=index_points,
                                                   observation_index_points=jnp.stack([_rho,_psi], axis=1),
-                                                  observations=_R,
+                                                  observations=_P,
                                                   jitter=1e-03
                                                 )
     #print('--------------------',model_T.mean())
