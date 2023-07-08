@@ -135,7 +135,7 @@ def create_nbody(cosmo, cosmo2):
     # Evolve the simulation forward
     res = odeint(make_ode_fn(nc), [particles+dx, p],
              jnp.concatenate([jnp.atleast_1d(0.1), stages]), cosmo, rtol=1e-5, atol=1e-5)
-    # res is ordered high to low redshift
+    # res is ordered high to low redshift: res[0][0]->highest redshift,  res[0][-1]-> lowest redshift
     
     return res
 
@@ -162,19 +162,17 @@ def calculat_Msun_per_particle(cosmo, particle_list):
 
     Msun_per_particle = []
     Rho_m_mean        = []
-    #rho_crit0         = jc.constants.rhocrit
+    rho_crit0         = jc.constants.rhocrit
 
     for i in range(len(particle_list)):
-
-        #jc.background.H(cosmo,stages[i]) returns units of 100h(km/s)/(Mpc)
-        rho_crit_a = 3*(jc.background.H(cosmo,stages[i])*cosmo.h)**2/8/jnp.pi/G_si*(3.086/1.989)*1000**3*1e-11 # [Msun/Mpc^3]
-        rho_m_mean = rho_crit_a*jc.background.Omega_m_a(cosmo, stages[i])
-        Mpart      = rho_m_mean * box_size[0] * box_size[1] * box_size[2] / len(particle_list[i])
-    
+        
+        #rhom(z) = rhom(z=0)*(1+z)**3 [h^2 Msun/Mpc^3]
+        rho_m_mean = rho_crit0*jc.background.Omega_m_a(cosmo,1.0)*(stages[i])**-3.*cosmo.h**2                #[Msun/Mpc^3]
+        Mpart      = rho_m_mean * box_size[0] * box_size[1] * box_size[2] / len(particle_list[i])/cosmo.h**3 #[Msun]  
+        
         Msun_per_particle.append(Mpart)
         Rho_m_mean.append(rho_m_mean)
-        #print(Mpart,rho_m_mean)
-        #pdb.set_trace()
+
     return Msun_per_particle, Rho_m_mean
 
 
@@ -269,14 +267,14 @@ def make_HPM_table_interpolator():
     return intpT, intpP
 
 # @jax.jit
-def HPM_GPmodel(cosmo,a,delta,psi,logMmin=11,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
+def HPM_GPmodel(cosmo,a,delta,psi,logMmin=8,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20):
     """Takes delta (overdensity) and psi (fscalar) and extracts the inverse mapping via
        HPM table to predict the value of T & P.
 
     Parameters
     ----------
     delta     : float, arr
-     overdensity values (rho_m-<rho_m>)/<rho_m>
+     overdensity values (rho_m)/<rho_m>
     psi     : float, arr
      fscalar valaues
     a       : float
@@ -293,7 +291,7 @@ def HPM_GPmodel(cosmo,a,delta,psi,logMmin=11,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr
     T   : float, arr
      Temperature in units of K
     P   : float, arr
-     Pressure in units of ????
+     Pressure in units of [Msun/s^2/Mpc]
     """
     
 
@@ -310,25 +308,27 @@ def HPM_GPmodel(cosmo,a,delta,psi,logMmin=11,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr
     del batched_Mr, m_grid, r_grid
     tabM,tabR,_,_,tabrho,tabpsi,tabT,tabP = res
     del res
+    print("hpmtable min psi: %.6e"%(np.min(tabpsi)))
+    print("hpmtable max psi: %.6e"%(np.max(tabpsi)))
 
     #Compute mean matter density in Msun/Mpc^3 to convert rho->delta
     rhom0    = jc.background.Omega_m_a(cosmo,1.0)*jc.constants.rhocrit/cosmo.h**2 # [(M_sun)/ (Mpc)^{3}]
     rhommean = rhom0*(a)**-3
+    print("hpmtable rhomean: %.6e"%(rhommean))
 
     # Use GP to make an interpolate to apply a reverse mapping
     tfb     = tfp.bijectors
     tfd     = tfp.distributions
     kern    = tfp.math.psd_kernels.ExponentiatedQuadratic()
-    #kern    = tfp.math.psd_kernels.AutoCompositeTensorPsdKernel(2)
 
     _delta  = (tabrho/rhommean).flatten(); del tabrho
     #_delta  = jnp.log10(tabrho).flatten(); del tabrho
     _psi    = jnp.log10(tabpsi).flatten(); del tabpsi
     _T      = jnp.log10(tabT).flatten()  ; del tabT
-    _P      = jnp.log10(tabP).flatten()  ; del tabP
+    _P      = jnp.log10(tabP).flatten()  ; del tabP #
     _M      = jnp.log10(tabM).flatten()  ; del tabM
     _R      = jnp.log10(tabR).flatten()  ; del tabR
-    print(jnp.max(_delta),jnp.max(_psi),jnp.max(_T),jnp.max(_P))
+    #print(jnp.max(_delta),jnp.max(_psi),jnp.max(_T),jnp.max(_P))
     
     model_T = tfd.GaussianProcessRegressionModel( kern,
                                                   index_points=index_points,
@@ -345,15 +345,9 @@ def HPM_GPmodel(cosmo,a,delta,psi,logMmin=11,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr
                                                   #jitter=5e-03
                                                 )
     
-    ##############################################
-    #print('--------------------',model_T.mean())
-    #pdb.set_trace()
-    #print(_T,_P)
-    #del _delta,_psi,_T,_P
-    TT=model_T.mean()
-    PP=model_P.mean()
+    TT = model_T.mean()
+    PP = model_P.mean()
     print(np.max(TT),np.max(PP))
-    #pdb.set_trace()
     return np.asarray(10**TT), np.asarray(10**PP)
 
 
@@ -367,9 +361,9 @@ def EGD_move_particles(res, i):
 
     Nparticles  = len(res[0][::-1][i])
     inds        = jax.random.shuffle(jax.random.PRNGKey(seed), jnp.arange(0,Nparticles-1))
-    split       = int(Omega_b/Omega_m*Nparticles)
-    egd_pos_gas = res[0][i][inds[:split]]
-    egd_pos_dm  = res[0][i][inds[split:]]
+    split       = int(Omega_b/Omega_m*Nparticles) # should this change over redshift???
+    egd_pos_gas = res[0][::-1][i][inds[:split]]   # flip order low-> highz
+    egd_pos_dm  = res[0][::-1][i][inds[split:]]   # flip order low-> highz
 
     # may be able to remove some of these that are not used later
     lg.warning("---- CIC painting")
@@ -379,6 +373,7 @@ def EGD_move_particles(res, i):
 
     total_particles_egd = cic_paint(egd_rho_dm, egd_pos_gas + egd_correction(total_delta_dmo, egd_pos_gas, params_camels_optimized))
     total_mass_egd      = total_particles_egd * Msun_per_particle[::-1][i]
+    #Msun_per_particle in high to lowz so flip order
 
     return jnp.concatenate((egd_pos_dm, egd_pos_gas + egd_correction(total_delta_dmo, egd_pos_gas, params_camels_optimized))), total_mass_egd
 
@@ -390,20 +385,25 @@ def lookup_HPM(cosmo,a,particles, total_mass_egd):
     chosen HPM table method. 
     """
 
+    vol_voxel  = box_size[0]/nc[0] * box_size[1]/nc[1] * box_size[2]/nc[2]   # [(Mpc/h)^3]
+
     lg.warning("---- Computing fscalar")
-    F_rhom     = jnp.fft.fftshift(jnp.fft.fftn(total_mass_egd))
+    F_rhom     = jnp.fft.fftshift(jnp.fft.fftn((total_mass_egd/vol_voxel) )) #[(Msun/h)/(Mpc/h)^3]
     kg         = create_kgrid(total_mass_egd.shape[0], total_mass_egd.shape[1], total_mass_egd.shape[2], lx=box_size[0], ly=box_size[1], lz=box_size[2])
     kg         = kg.at[kg==0].set(jnp.inf)
-    F_fscalar  = 2*jnp.pi**2*G*F_rhom/kg # m^3/kg/s^2 (Msun/h)/(Mpc/h)^2  
+    #pdb.set_trace()
+    F_fscalar  = 2*jnp.pi**2*(G)*F_rhom/kg*1.989*3.24**2*1e-18*100*cosmo.h   # [cm/s^2] -- in units of HPM table
     R_fscalar  = jnp.fft.ifftn(jnp.fft.ifftshift(F_fscalar)) 
     R_fscalar -= jnp.min(R_fscalar.real)  
-    R_fscalar  = R_fscalar/h*(1.989e30/3.086e+22)/3.086e+22*100 # * (10**(-3))**3 * (1.989* 10**30 / h)  * 3.1536 * 10**16 / (3.086*10**19/h)**2 
+    R_fscalar  = R_fscalar 
+    print("measured min psi: %.6e"%(np.min(R_fscalar.real)))
+    print("measured max psi: %.6e"%(np.max(R_fscalar.real)))
     del F_rhom,kg,F_fscalar
 
     # get rho and f scalar on each particle
     # Note here that rho means (rho_m - <rho_m>)/<rho_m> not mass per Mpc^3
     fscalar_pos = cic_read(R_fscalar.real, particles)
-    delta_pos   = cic_read(total_mass_egd/np.mean(total_mass_egd), particles) # (rho-avg)/avg
+    delta_pos   = cic_read(total_mass_egd/np.mean(total_mass_egd), particles) # (rho)/avg
 
     if GPHPM==False:
         lg.warning("---- Interpolating T/P values")
@@ -412,11 +412,7 @@ def lookup_HPM(cosmo,a,particles, total_mass_egd):
         
     if GPHPM==True: 
         lg.warning("---- Interpolating T/P values")
-        #print(rho_pos, fscalar_pos)
-        #pdb.set_trace()
         Tf,Pf = HPM_GPmodel(cosmo,a,delta_pos, fscalar_pos)
-        #HPM_GPmodel(cosmo,a,delta,psi,logMmin=9,logMmax=16,NM=20,rmin=0.1,rmax=4,Nr=20)
-        #print(Tf,Pf)
     return Tf, Pf
 
 #@jax.jit
@@ -437,27 +433,31 @@ def tsz_Born(cosmo,
     """
 
     # Compute constant prefactor:
-    constant_factor = 1./1e9 * sigT/(3.0886e22)**2 /me*1.99e30 *(1000)**2/c**2*h 
+    #constant_factor = 1./1e9 * sigT/(3.0886e22)**2 /me*1.99e30 *(1000)**2/c**2*h 
+    constant_factor = sigT/(me*c*c)*1.989e30 #[s^2/Msun]
 
     Tsz = []
     tsz = 0
     for entry in pressure_planes:
-        r = entry['r']; a = entry['a']; p = entry['plane']
-        dx = entry['dx']; dz = entry['dz']
-        # Normalize density planes
-        normalization = dz * r / a
-
-        p = p * constant_factor * normalization
-
+        r  = entry['r']     # comoving radial distance [Mpc/h]
+        a  = entry['a']     # scale factor [unitless]
+        p  = entry['plane'] # pressure plane [Msun/s^2/Mpc]
+        dx = entry['dx']    # grid size [Mpc/h]
+        dz = entry['dz']    # slab width [Mpc/h]
+        
+        # Convert to Compton-y
+        p = p * constant_factor*dz/cosmo.h # [unitless]
+        #print(p)
+        print('[%.5f] max pressure: '%a,np.max(p))
         # Interpolate at the density plane coordinates
         im = map_coordinates(p, 
                          coords * r / dx - 0.5, 
                          order=1, mode="wrap")
 
         tsz += im 
-        Tsz.append(tsz)
+        #Tsz.append(tsz)
 
-    return Tsz
+    return tsz
 
 def pressure_plane(positions, p,
                   box_shape,
@@ -515,24 +515,28 @@ coords2 = coords.reshape([2, -1]).T.to(u.rad)
 
 lg.warning("Creating Nbody, returning sim and array of scalefactos")
 res = create_nbody(cosmo, cosmo2)
+#pdb.set_trace()
 # np.savez('res.npz', res=res)
 
 lg.warning("Computing Msun per particle and rhom")
 Msun_per_particle, Rho_m_mean = calculat_Msun_per_particle(cosmo,res[0])
-#print(Msun_per_particle, Rho_m_mean)
+print(Msun_per_particle, Rho_m_mean)
+#pdb.set_trace()
 lg.warning("Making density and pressure planes")
 
 lensplanes    = []
 pressureplanes = []
 
-for i in range(n_lens):
+for i in range(0,n_lens):
+    if i==8:
+        continue #somthing wrong here???
     # low to high redshift
 
-    lg.warning("-- Processing lenplane %d"%i)
+    lg.warning("-- Processing lenplane %d [a=%.5f]"%(i,stages[i]))
 
     lg.warning("---- Moving particles via EGD")
-    particles_moved, total_mass_egd = EGD_move_particles(res, i)
-    # np.savez('moved_res_'+str(i)+'.npz', res=particles_moved, mass_mesh=total_mass_egd)
+    particles_moved, total_mass_egd = EGD_move_particles(res, i) # low to highz
+    #np.savez('moved_res_'+str(i)+'.npz', res=particles_moved, mass_mesh=total_mass_egd)
    
     width     = lensplane_width/box_size[-1]*nc[-1]
     center    = (i+0.5)*lensplane_width/box_size[-1]*nc[-1]
@@ -562,14 +566,15 @@ for i in range(n_lens):
     #pdb.set_trace()
     Tf, Pf = lookup_HPM(cosmo,stages[::-1][i],particles_moved, total_mass_egd)
     print(Tf,Pf)
-    # np.savez('TP.npz', T=Tf, P=Pf)
+    #np.savez('TP.npz', T=Tf, P=Pf)
+    #sys.exit()
     pp = pressure_plane(particles_moved, Pf,
                               nc,
                               (i+0.5)*lensplane_width/box_size[-1]*nc[-1],
                               width=lensplane_width/box_size[-1]*nc[-1],
                               plane_resolution=field_npix)
-    # np.savez('pp_'+str(i)+'.npz', pp=pp)
-
+    #np.savez('pp_'+str(i)+'.npz', pp=pp)
+    
     pressureplanes.append(
             {'r'    : r_center[i],
                 'a'    : stages[::-1][i],
@@ -578,7 +583,7 @@ for i in range(n_lens):
                           'dz'   : lensplane_width
                          }
                         )
-
+    #pdb.set_trace()
 lg.warning("Integrating along the line of sight -- kappa")
 kappa = convergence_Born(cosmo,
                          lensplanes,
@@ -592,10 +597,9 @@ y = tsz_Born(cosmo,
              coords=jnp.array(coords2).T.reshape(2,field_npix,field_npix),
              z_source=z_source)
 
-
 np.savez('kappa.npz', kappa=kappa, z=z_source)
 np.savez('y.npz', y=y, z=z_source)
 
 end = time()
-
+#pdb.set_trace()
 print(f'It took {end - start} seconds!')
