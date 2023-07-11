@@ -69,6 +69,10 @@ me     = 9.11e-31 # kg
 c      = 3e8      # m^2/s^2
 mH_cgs = 1.67223e-24
 
+mp = 1.67262192e-27 # kg
+kB = 1.380549e-23   # J/K, kg*m^2/s^2/K [ML^2/T^2/K]
+kB_over_mp = kB  * (3.24e-23)**2 / mp
+
 icm = {}
 icm['XH']     = 0.76
 icm['YHe']    = 0.24
@@ -445,12 +449,20 @@ def tsz_Born(cosmo,
       `Tensor` of shape [batch_size, N, Nz], of convergence values.
     """
 
+    # converting the density-weighted temperature planes to the right units
+    # what we have is total_density*T
+    # we want to 1) go from total density to electron density
+    #            2) multiply by kB, the Boltzmann constant in the right units
+    #               Joule is [M][L^2][T^-2] --> [M_sun][Mpc^2][T^-2]
+    #            3) convert comoving density to physical density
+
     # Compute constant prefactor:
     #constant_factor = 1./1e9 * sigT/(3.0886e22)**2 /me*1.99e30 *(1000)**2/c**2*h 
     constant_factor = sigT/(me*c*c)*1.989e30 #[s^2/Msun]
 
     Tsz = []
     tsz = 0
+    i = 0
     for entry in pressure_planes:
         
         r  = entry['r']     # comoving radial distance [Mpc/h]
@@ -459,8 +471,12 @@ def tsz_Born(cosmo,
         dx = entry['dx']    # grid size [Mpc/h]
         dz = entry['dz']    # slab width [Mpc/h]
         
+        # Convert to pressure
+        p = p*(Omega_b/Omega_m)/a**3*kB_over_mp*Msun_per_particle[::-1][i]*cosmo.h**3
+        i+=1
+
         # Convert to Compton-y
-        p = p * constant_factor*dz/cosmo.h # [unitless]
+        p = p * constant_factor*dz*a/cosmo.h # [unitless]
         np.save('p_rescal.npy',p)
         #print(p)
         print('[%.5f] max pressure: '%a,np.max(p))
@@ -477,13 +493,14 @@ def tsz_Born(cosmo,
         p=0
     return Tsz
 
-def pressure_plane(positions, p,
+def pressure_plane(positions, t,
                   box_shape,
                   center,
                   width,
                   plane_resolution,
                   smoothing_sigma=None):
-    """ Extacts a pressure plane from the 3d positions of points
+    """ Extacts a pressure plane from the 3d positions of points.
+        These planes do not have the right units yet...
     """
     nx, ny, nz = box_shape
     xy = positions[..., :2]
@@ -496,7 +513,7 @@ def pressure_plane(positions, p,
     xy = xy / nx * plane_resolution
 
     # Selecting only particles that fall inside the volume of interest
-    weight = jnp.where((d > (center - width / 2)) & (d <= (center + width / 2)), 1., 0.)*p
+    weight = jnp.where((d > (center - width / 2)) & (d <= (center + width / 2)), 1., 0.)*t
     # Painting density plane
     #p_plane = cic_paint_2d(jnp.zeros([plane_resolution, plane_resolution]), xy, weight) * cic_paint_2d(jnp.zeros([plane_resolution, plane_resolution]), xy, p)
     p_plane = cic_paint_2d(jnp.zeros([plane_resolution, plane_resolution]), xy, weight)
@@ -600,7 +617,7 @@ for i in range(1,n_lens):
     print(Tf,Pf)
     #np.savez('TP.npz', T=Tf, P=Pf)
     #sys.exit()
-    pp = pressure_plane(particles_moved, Pf,
+    pp = pressure_plane(particles_moved, Tf,
                               nc,
                               (i+0.5)*lensplane_width/box_size[-1]*nc[-1],
                               width=lensplane_width/box_size[-1]*nc[-1],
@@ -637,3 +654,5 @@ np.savez('y.npz', y=y, z=z_source)
 end = time()
 #pdb.set_trace()
 print(f'It took {end - start} seconds!')
+
+
