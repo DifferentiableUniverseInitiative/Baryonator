@@ -178,11 +178,11 @@ def get_density_planes(
   return density_planes
 
 
-def forward_model(box_size=[200., 200., 2000.], # In Mpc/h
-                  nc = [32, 32, 320],         # Number of pixels
+def forward_model(box_size=[256., 256., 2048.], # In Mpc/h
+                  nc = [64, 64, 256],         # Number of pixels
                   field_size = 10,            # Size of the lensing field in degrees
                   field_npix = 256,           # Number of pixels in the lensing field
-                  sigma_e = 0.25,             # Standard deviation of galaxy ellipticities
+                  sigma_e = 0.0,             # Standard deviation of galaxy ellipticities
                   galaxy_density = 10.,       # Galaxy density per arcmin^2, per redshift bin
                   nz_shear = None
                   ):

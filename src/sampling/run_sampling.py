@@ -39,7 +39,7 @@ with h5py.File("shear_photoz_stack.hdf5") as f:
 
 # Loads some correction factors to improve the resolution of the simulation
 print('Loading camels loss params')
-params = pickle.load( open( "/project/chihway/yomori/repo/Baryonator/notebooks/camels_25_64_pkloss.params", "rb" ) )
+params = pickle.load( open( "camels_25_64_pkloss.params", "rb" ) )
 
 
 __all__ = ['get_density_planes']
