@@ -198,41 +198,47 @@ def get_density_planes(
             'dz'    : dz
         }
 
-def convergence_Born(cosmo,density_planes,coords,z_source):
-  """
-  Compute the Born convergence
-  Args:
-    cosmo: `Cosmology`, cosmology object.
-    density_planes: list of dictionaries (r, a, density_plane, dx, dz), lens planes to use 
-    coords: a 3-D array of angular coordinates in radians of N points with shape [batch, N, 2].
-    z_source: 1-D `Tensor` of source redshifts with shape [Nz] .
-    name: `string`, name of the operation.
-  Returns:
-    `Tensor` of shape [batch_size, N, Nz], of convergence values.
-  """
-  # Compute constant prefactor:
-  constant_factor = 3 / 2 * cosmo.Omega_m * (constants.H0 / constants.c)**2
-  # Compute comoving distance of source galaxies
-  r_s = jc.background.radial_comoving_distance(cosmo, 1 / (1 + z_source))
+def convergence_Born(cosmo, density_planes, coords, z_source):
+    """
+    Compute the Born convergence
+    Args:
+        cosmo: `Cosmology`, cosmology object.
+        density_planes: list of dictionaries (r, a, density_plane, dx, dz), lens planes to use 
+        coords: a 3-D array of angular coordinates in radians of N points with shape [batch, N, 2].
+        z_source: 1-D `Tensor` of source redshifts with shape [Nz] .
+        name: `string`, name of the operation.
+    Returns:
+        `Tensor` of shape [batch_size, N, Nz], of convergence values.
+    """
+    # Compute constant prefactor for lensing:
+    constant_factor = 3 / 2 * cosmo.Omega_m * (constants.H0 / constants.c)**2
 
-  convergence = 0
-  n_planes = len(density_planes['planes'])
-  for i in range(n_planes):
+    # Compute comoving distance of source galaxies
+    r_s = jc.background.radial_comoving_distance(cosmo, 1 / (1 + z_source))
 
-    r = density_planes['r'][i]; a = density_planes['a'][i]; p = density_planes['planes'][i]
-    dx = density_planes['dx']; dz = density_planes['dz']
-    # Normalize density planes
-    density_normalization = dz * r / a
-    p = (p - p.mean()) * constant_factor * density_normalization
+    #Number of density planes to use
+    n_planes = len(density_planes['planes'])
 
-    # Interpolate at the density plane coordinates
-    im = map_coordinates(p,
-                         coords * r / dx - 0.5,
-                         order=1, mode="wrap")
+    convergence = 0
+    
+    for i in range(n_planes):
 
-    convergence += im * jnp.clip(1. - (r / r_s), 0, 1000).reshape([-1, 1, 1])
+        r = density_planes['r'][i]; a = density_planes['a'][i]; p = density_planes['planes'][i]
+        dx = density_planes['dx']; dz = density_planes['dz']
 
-  return convergence
+        # Normalize density planes
+        density_normalization = dz * r / a
+        p = (p - p.mean()) * constant_factor * density_normalization
+
+        # Interpolate at the density plane coordinates
+        im = map_coordinates(p,
+                             coords * r / dx - 0.5,
+                             order=1, mode="wrap"
+                            )
+
+        convergence += im * jnp.clip(1. - (r / r_s), 0, 1000).reshape([-1, 1, 1])
+
+    return convergence
 
 
 
