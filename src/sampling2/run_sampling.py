@@ -26,23 +26,6 @@ from jaxpm.kernels import fftk,gradient_kernel, laplace_kernel, longrange_kernel
 from jaxpm.utils import gaussian_smoothing
 from jax.scipy.ndimage import map_coordinates
 
-# Reading the DC2 tomographic bins into redshift distribution objects
-with h5py.File("shear_photoz_stack.hdf5") as f:
-    group = f["n_of_z"]
-    # Read the z grid
-    source   = group["source"]
-    z_shear  = source['z'][::]
-    # Read the true n(z)
-    nz_shear = [jc.redshift.kde_nz(z_shear,source[f"bin_{i}"][:],bw=0.01, zmax=2.5) for i in range(4)]
-
-# Loads some correction factors to improve the resolution of the simulation
-params = pickle.load( open( "camels_25_64_pkloss.params", "rb" ) )
-
-# Missing comment
-model = hk.without_apply_rng(hk.transform(lambda x, a: NeuralSplineFourierFilter(n_knots=16,latent_size=32)(x, a)))
-
-# a function to convert ra and dec to theta and phi
-
 def linear_field(mesh_shape, box_size, pk):
     """Generate initial conditions.
     mesh_shape : array_like
@@ -215,11 +198,6 @@ def get_density_planes(
             'dz'    : dz
         }
 
-
-from jax.scipy.ndimage import map_coordinates
-from jaxpm.utils import gaussian_smoothing
-import jax_cosmo.constants as constants
-
 def convergence_Born(cosmo,density_planes,coords,z_source):
   """
   Compute the Born convergence
@@ -327,14 +305,33 @@ def forward_model(box_size       = [200., 200., 2000.],
 
 ################################################### main #################################################################
 
-# Condition the model on a given set of parameters
-# Here we are reparametrizing the model to avoid the issue of sampling from a truncated normal
+
+# Reading the DC2 tomographic bins into redshift distribution objects
+# This file can be obtained using:
+# !wget --quiet https://github.com/LSSTDESC/star-challenge/raw/main/cosmodc2-srd-sample/generation/shear_photoz_stack.hdf5
+with h5py.File("shear_photoz_stack.hdf5") as f:
+    #Read n(z) for the 4 source redshift bins
+    source   = f["n_of_z"]["source"]
+    z_shear  = source['z'][::]
+    nz_shear = [jc.redshift.kde_nz(z_shear,source[f"bin_{i}"][:],bw=0.01, zmax=2.5) for i in range(4)]
+
+# Loads some correction factors to improve the resolution of the simulation.
+# This file can be obtained using:
+# !wget --quiet https://github.com/LSSTDESC/bayesian-pipelines-cosmology/raw/main/notebooks/forward_model/camels_25_64_pkloss.params
+params = pickle.load( open( "camels_25_64_pkloss.params", "rb" ) )
+
+# TODO: ADD COMMENT
+model  = hk.without_apply_rng(hk.transform(lambda x, a: NeuralSplineFourierFilter(n_knots=16,latent_size=32)(x, a)))
+
+# Condition the model on Omega_c and sigma_8.
+# Note here we are using the reparametrized values of Omega_c and sigma_8. 
 fiducial_model = numpyro.handlers.condition(forward_model, {'omega_c': 0.,
                                                             'sigma_8': 0.
                                                            }
                                            )
 
-# sample a mass map and save corresponding true parameters
+# Trace the execution of a probabilistic function and return its execution trace
+# Physically generating a mass map and save corresponding true parameters
 model_trace = numpyro.handlers.trace(numpyro.handlers.seed(fiducial_model, jax.random.PRNGKey(42))).get_trace()
 
 def config(x):
@@ -345,19 +342,23 @@ def config(x):
     else:
         return None
 
-# ok, cool, now let's sample this posterior
-observed_model = condition(
-                           forward_model, {'kappa_0': model_trace['kappa_0']['value'],
-                                           'kappa_1': model_trace['kappa_1']['value'],
-                                           'kappa_2': model_trace['kappa_2']['value'],
-                                           'kappa_3': model_trace['kappa_3']['value']}
-                          )
+# Conditioning based on the test data 
+obs_model = condition(
+                      forward_model, {'kappa_0': model_trace['kappa_0']['value'],
+                                      'kappa_1': model_trace['kappa_1']['value'],
+                                      'kappa_2': model_trace['kappa_2']['value'],
+                                      'kappa_3': model_trace['kappa_3']['value']
+                                      }
+                     )
+obs_model_reparam = obs_model 
 
-observed_model_reparam = observed_model 
-
-
+# Setting up NUTS sampler
+# model         : probabilistic model to be sampled from
+# init_strategy : function that takes a model and returns an initial state for the sampler
+# max_tree_depth: maximum depth of the tree implicitly built during each iteration
+# step_size     : step size for the dual averaging step size adaptation
 nuts_kernel = numpyro.infer.NUTS(
-                                 model          = observed_model_reparam,
+                                 model          = obs_model_reparam,
                                  init_strategy  = partial(numpyro.infer.init_to_value, values={'omega_c': 0.,
                                                                                                'sigma_8': 0.,
 							                                                                   'initial_conditions': model_trace['initial_conditions']['value']
@@ -367,6 +368,13 @@ nuts_kernel = numpyro.infer.NUTS(
                                  step_size      = 2e-2
                                  )
 
+# Setup MCMC sampler
+# kernel      : kernel to use for sampling
+# num_warmup  : number of warmup steps
+# num_samples : number of samples to generate
+# num_chains  : number of MCMC chains to run in parallel
+# chain_method: method to use for splitting work between chains
+# progress_bar: whether to enable progress bar updates
 mcmc = numpyro.infer.MCMC(
                           nuts_kernel,
                           num_warmup=0,
