@@ -1,23 +1,22 @@
-import h5py
+import h5py,pickle
 import jax
 import jax.numpy as jnp
 import jax_cosmo as jc
 #import astropy.units as u
 import haiku as hk
-import pickle
 import diffrax
 import numpyro
 import numpyro.distributions as dist
+from diffrax import diffeqsolve, ODETerm, Dopri5, PIDController, SaveAt
 from jax_cosmo.scipy.integrate import simps
-from bpcosmo.pm import get_density_planes
+from jaxpm.pm import lpt
 from jaxpm.lensing import convergence_Born
-from jax.experimental.ode import odeint
-from jaxpm.pm import lpt, make_ode_fn
 from jaxpm.painting import cic_paint, cic_read
 from jaxpm.kernels import gradient_kernel, laplace_kernel, longrange_kernel, fftk
 from jaxpm.lensing import density_plane
 from jaxpm.nn import NeuralSplineFourierFilter
-from diffrax import diffeqsolve, ODETerm, Dopri5, LeapfrogMidpoint, PIDController, SaveAt
+from bpcosmo.pm import get_density_planes
+
 
 def linear_field(mesh_shape, box_size, pk):
     """
@@ -33,6 +32,7 @@ def linear_field(mesh_shape, box_size, pk):
     field = numpyro.sample('initial_conditions', dist.Normal(jnp.zeros(mesh_shape), jnp.ones(mesh_shape)))
     field = jnp.fft.rfftn(field) * pkmesh**0.5
     field = jnp.fft.irfftn(field)
+
     return field
 
 
@@ -86,7 +86,7 @@ def get_density_planes(
 
     # Initial displacement
     cosmology._workspace = {}  # FIX ME: this a temporary fix
-    dx, p, f = lpt(cosmology, initial_conditions, particles, a=a_init)
+    dx, p, _ = lpt(cosmology, initial_conditions, particles, a=a_init)
 
     @jax.jit
     def neural_nbody_ode(a, state, args):
