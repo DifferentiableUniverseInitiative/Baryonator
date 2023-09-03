@@ -247,12 +247,12 @@ def forward_model(data = None):
     """
     This function defines the top-level forward model for our observations
     """
-    box_size   = [200., 200., 2000.] # In Mpc/h
-    nc         = [16, 16, 128]       # Number of pixels
+    box_size   = [200., 200., 4000.] # In Mpc/h
+    nc         = [32, 32, 256]       # Number of pixels
     field_size = 5                   # Size of the lensing field in degrees
     field_npix = 256                 # Number of pixels in the lensing field
-    sigma_e    = 0.6                 # Standard deviation of galaxy ellipticities
-    galaxy_density = 27./5           # Galaxy density per arcmin^2, per redshift bin
+    sigma_e    = 0.26                # Standard deviation of galaxy ellipticities
+    galaxy_density = 10.           # Galaxy density per arcmin^2, per redshift bin
 
     # Sampling cosmological parameters and defines cosmology
     # Note that the parameters are shifted so e.g. Omega_c=0 means Omega_c=0.25
@@ -274,25 +274,25 @@ def forward_model(data = None):
                                         )
 
     # Defining the coordinate grid for lensing map
-    print(jnp.linspace(0, field_size, field_npix, endpoint=False))
     xgrid, ygrid = jnp.meshgrid(jnp.linspace(0, field_size, field_npix, endpoint=False), # range of X coordinates
                                 jnp.linspace(0, field_size, field_npix, endpoint=False)) # range of Y coordinates
 
     coords = jnp.array((jnp.stack([xgrid, ygrid], axis=0))*0.017453292519943295 ) # deg->rad
 
     # Generate convergence maps by integrating over nz and source planes
-    convergence_maps = []
-    for i,nz in enumerate(nz_shear):
-        print("Making convergence map zbin %d"%i)
-        kappa =  simps(lambda z: nz(z).reshape([-1,1,1]) * convergence_Born(cosmo, density_planes, coords, z), 0.01, 1.0, N=32)
-        #import pdb; pdb.set_trace()
-        convergence_maps.append(kappa)
+    #convergence_maps = []
+    #for i,nz in enumerate(nz_shear):
+    #print("Making convergence map zbin %d"%i)
+    kappa =  simps(lambda z: nz(z).reshape([-1,1,1]) * convergence_Born(cosmo, density_planes, coords, z), 0.01, 1.0, N=32)
+    #import pdb; pdb.set_trace()
+    #convergence_maps.append(kappa)
 
     # Apply noise to the maps (this defines the likelihood)
     #observed_maps = []
     #for i,k in enumerate(convergence_maps):
     #print("Adding noise to zbin %d"%i)
-    numpyro.sample('kappa_0', dist.Normal(convergence_maps[0], sigma_e/jnp.sqrt(galaxy_density*(field_size*60/field_npix)**2)) ,obs=data) 
+    numpyro.deterministic('latent_image', kappa)
+    numpyro.sample('kappa_0', dist.Normal(kappa, sigma_e/jnp.sqrt(galaxy_density*(field_size*60/field_npix)**2)) ,obs=data) 
 
     #return observed_maps
 
@@ -337,9 +337,9 @@ nuts_kernel = numpyro.infer.NUTS(
 # Run the sampling 
 mcmc = numpyro.infer.MCMC(
                           nuts_kernel,
-                          num_warmup=10,
-                          num_samples=100,
-                          # chain_method="parallel", num_chains=8,
+                          num_warmup=200,
+                          num_samples=1000,
+                          chain_method="parallel", num_chains=4,
                           # thinning=2,
                           progress_bar=True
                          )
@@ -350,5 +350,18 @@ print("-----------------DONE SAMPLING---------------------")
 
 res = mcmc.get_samples()
 #mcmc.print_summary()
-np.save('/pscratch/sd/y/yomori/omegac.npy',res['omega_c'])
-np.save('/pscratch/sd/y/yomori/sigma_8.npy',res['sigma_8'])
+#np.save('/pscratch/sd/y/yomori/omegac.npy',res['omega_c'])
+#np.save('/pscratch/sd/y/yomori/sigma_8.npy',res['sigma_8'])
+
+# Saving an intermediate checkpoint
+with open('lensing_fwd_mdl_nbody_0.pickle', 'wb') as handle:
+    pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+# Resuming from a checkpoint above
+for i in range(4):
+    print('round',i,'done')
+    mcmc.post_warmup_state = mcmc.last_state
+    mcmc.run(mcmc.post_warmup_state.rng_key)
+    res = mcmc.get_samples()
+    with open('lensing_fwd_mdl_nbody_%d.pickle'%(i+1), 'wb') as handle:
+        pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
