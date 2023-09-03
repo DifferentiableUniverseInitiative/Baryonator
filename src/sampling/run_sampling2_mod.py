@@ -248,10 +248,10 @@ def forward_model(data = None):
     This function defines the top-level forward model for our observations
     """
     box_size   = [200., 200., 4000.] # In Mpc/h
-    nc         = [32, 32, 256]       # Number of pixels
-    field_npix = 256                 # Number of pixels in the lensing field
-    sigma_e    = 0.26                # Standard deviation of galaxy ellipticities
-    galaxy_density = 10.           # Galaxy density per arcmin^2, per redshift bin
+    nc         = [64, 64, 256]       # Number of pixels
+    field_npix = 128                 # Number of pixels in the lensing field
+    sigma_e    = 0.02                 # Standard deviation of galaxy ellipticities
+    galaxy_density = 10.             # Galaxy density per arcmin^2, per redshift bin
 
     field_size = jnp.arctan2(box_size[-1],box_size[0])/np.pi*180                  # Size of the lensing field in degrees
 
@@ -282,9 +282,9 @@ def forward_model(data = None):
 
     # Generate convergence maps by integrating over nz and source planes
     #convergence_maps = []
-    #for i,nz in enumerate(nz_shear):
+    for i,nz in enumerate(nz_shear):
     #print("Making convergence map zbin %d"%i)
-    kappa =  simps(lambda z: nz(z).reshape([-1,1,1]) * convergence_Born(cosmo, density_planes, coords, z), 0.01, 1.0, N=32)
+        kappa =  simps(lambda z: nz(z).reshape([-1,1,1]) * convergence_Born(cosmo, density_planes, coords, z), 0.01, 1.0, N=32)
     #import pdb; pdb.set_trace()
     #convergence_maps.append(kappa)
 
