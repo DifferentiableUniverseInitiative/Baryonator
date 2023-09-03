@@ -248,13 +248,14 @@ def forward_model(data = None):
     This function defines the top-level forward model for our observations
     """
     box_size   = [200., 200., 4000.] # In Mpc/h
-    nc         = [64, 64, 256]       # Number of pixels
-    field_npix = 128                 # Number of pixels in the lensing field
-    sigma_e    = 0.02                 # Standard deviation of galaxy ellipticities
+    nc         = [32, 32, 256]       # Number of pixels
+    field_npix = 64                 # Number of pixels in the lensing field
+    sigma_e    = 0.0000                 # Standard deviation of galaxy ellipticities
     galaxy_density = 10.             # Galaxy density per arcmin^2, per redshift bin
 
-    field_size = jnp.arctan2(box_size[-1],box_size[0])/np.pi*180                  # Size of the lensing field in degrees
-
+    #field_size = jnp.arctan2(box_size[-1],box_size[0])/np.pi*180  
+    field_size = jnp.arctan2(box_size[0],box_size[-1])/np.pi*180                  # Size of the lensing field in degrees
+    print('field size is %.2fdeg x %.2fdeg'%(field_size,field_size) )
     # Sampling cosmological parameters and defines cosmology
     # Note that the parameters are shifted so e.g. Omega_c=0 means Omega_c=0.25
     Omega_c = numpyro.sample('omega_c', dist.TruncatedNormal(0.,1, low=-1))*0.2 + 0.25
@@ -321,7 +322,7 @@ fiducial_model = numpyro.handlers.condition(forward_model, {'omega_c': 0., 'sigm
 model_trace    = numpyro.handlers.trace(numpyro.handlers.seed(fiducial_model, jax.random.PRNGKey(42))).get_trace()
 
 np.save('fidcucial_kappa.npy',model_trace['kappa_0']['value'])
-#import pdb; pdb.set_trace()
+import pdb; pdb.set_trace()
 
 # ok, cool, now let's sample this posterior
 observed_model = numpyro.handlers.condition(forward_model, {'kappa_0': model_trace['kappa_0']['value']})
