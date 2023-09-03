@@ -249,10 +249,11 @@ def forward_model(data = None):
     """
     box_size   = [200., 200., 4000.] # In Mpc/h
     nc         = [32, 32, 256]       # Number of pixels
-    field_size = 5                   # Size of the lensing field in degrees
     field_npix = 256                 # Number of pixels in the lensing field
     sigma_e    = 0.26                # Standard deviation of galaxy ellipticities
     galaxy_density = 10.           # Galaxy density per arcmin^2, per redshift bin
+
+    field_size = jnp.arctan2(boxsize[-1],boxsize[0])/np.pi*180                  # Size of the lensing field in degrees
 
     # Sampling cosmological parameters and defines cosmology
     # Note that the parameters are shifted so e.g. Omega_c=0 means Omega_c=0.25
@@ -319,7 +320,7 @@ fiducial_model = numpyro.handlers.condition(forward_model, {'omega_c': 0., 'sigm
 # Sample a mass map and save corresponding true parameters
 model_trace    = numpyro.handlers.trace(numpyro.handlers.seed(fiducial_model, jax.random.PRNGKey(42))).get_trace()
 
-#np.save('/pscratch/sd/y/yomori/testmap.npy',model_trace['kappa_0']['value'])
+np.save('fidcucial_kappa.npy',model_trace['kappa_0']['value'])
 #import pdb; pdb.set_trace()
 
 # ok, cool, now let's sample this posterior
@@ -337,8 +338,8 @@ nuts_kernel = numpyro.infer.NUTS(
 # Run the sampling 
 mcmc = numpyro.infer.MCMC(
                           nuts_kernel,
-                          num_warmup=200,
-                          num_samples=1000,
+                          num_warmup=1000,
+                          num_samples=10000,
                           chain_method="parallel", num_chains=4,
                           # thinning=2,
                           progress_bar=True
