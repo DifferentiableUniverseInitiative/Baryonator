@@ -253,7 +253,7 @@ def forward_model(data = None):
     sigma_e    = 0.26                # Standard deviation of galaxy ellipticities
     galaxy_density = 10.           # Galaxy density per arcmin^2, per redshift bin
 
-    field_size = jnp.arctan2(boxsize[-1],boxsize[0])/np.pi*180                  # Size of the lensing field in degrees
+    field_size = jnp.arctan2(box_size[-1],box_size[0])/np.pi*180                  # Size of the lensing field in degrees
 
     # Sampling cosmological parameters and defines cosmology
     # Note that the parameters are shifted so e.g. Omega_c=0 means Omega_c=0.25
