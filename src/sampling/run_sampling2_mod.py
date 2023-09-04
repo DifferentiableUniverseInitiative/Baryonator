@@ -1,6 +1,5 @@
-
 import os,sys
-os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION']='.95'
+#os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION']='.95'
 import h5py, pickle, jax, jaxpm, numpyro, diffrax
 import haiku as hk
 import numpy as np
@@ -21,19 +20,29 @@ from numpyro.handlers import seed, trace, condition, reparam
 #from diffrax import diffeqsolve, ODETerm, Dopri5, LeapfrogMidpoint, PIDController, SaveAt
 
 # Function to generate intial conditions
-def linear_field(mesh_shape, box_size, pk):
+def linear_field(mesh_shape, box_size, pk, field ):
   """Generate initial conditions
   mesh_shape : list of 3 numbers e.g. [64,64,2000]
   box_size   : list of 3 numbers in units of Mpc/h [100,100,4000]
   pk         : power spectrum to generate initial condition from. 
   """
+  #print(rng_key.shape)
+  #import pdb;pdb.set_trace()
   kvec   = jaxpm.kernels.fftk(mesh_shape)
   kk     = jnp.sqrt(sum((ki / jnp.pi)**2 for ki in kvec))
   kmesh  = sum((kk / box_size[i] * mesh_shape[i])**2 for i, kk in enumerate(kvec))**0.5
   pkmesh = pk(kmesh) * (mesh_shape[0] * mesh_shape[1] * mesh_shape[2]) / (box_size[0] * box_size[1] * box_size[2])
 
   # This is one of the variables (although it's a 3d grid) we are sampling over 
-  field  = numpyro.sample('initial_conditions',dist.Normal(jnp.zeros(mesh_shape), jnp.ones(mesh_shape)))
+  print('---------------------------------------------------------------------')
+  #print(rng_key_init.shape)
+  #rng_key1, rng_key2 = jax.random.split(rng_key)
+  #rng_key = numpyro.prng_key()
+  #rng_key1, rng_key2 = jax.random.split( numpyro.prng_key() )
+  
+  #mu = jnp.zeros(mesh_shape)
+  #s  = jnp.ones(mesh_shape)
+  #field  = numpyro.sample('initial_conditions',dist.Normal(mu,s) )
 
   field  = jnp.fft.rfftn(field) * pkmesh**0.5
   field  = jnp.fft.irfftn(field)
@@ -45,7 +54,9 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
                                   density_plane_smoothing = 3.  , # In Mpc/h
                                   box_size = [400., 400., 4000.], # In Mpc/h
                                   nc       = [16, 16, 128],
-                                  neural_spline_params=None):
+                                  neural_spline_params=None,
+                                  field = None
+                                  ):
     """ Function that returns tomographic density planes for a given cosmology from a lightcone.
         Args:
             cosmology: jax-cosmo object
@@ -60,7 +71,6 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
                 comoving distance (r) and scale factors (a). Each slice "plane" is a
                 2d array of size density_plane_npix^2
     """
-                                
     # Initial scale factor for the simulation
     a_init = 0.01
     print("Setting initial redshift to %.2f"%a_init)
@@ -84,7 +94,7 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
     pk_fn = lambda x: jc.scipy.interpolate.interp(x.reshape([-1]), kh, pk).reshape(x.shape)
 
     # Create initial conditions
-    initial_conditions = linear_field(nc, box_size, pk_fn)
+    initial_conditions = linear_field(nc, box_size, pk_fn, field)
 
     # Create particles
     particles = jnp.stack(jnp.meshgrid(*[jnp.arange(s) for s in nc]),axis=-1).reshape([-1, 3])
@@ -243,18 +253,19 @@ def convergence_Born(cosmo, density_planes, coords , z_source):
     return convergence
 
 
-def forward_model(data = None):
+def forward_model( data = None):
     """
     This function defines the top-level forward model for our observations
     """
     box_size   = [200., 200., 4000.] # In Mpc/h
-    nc         = [32, 32, 256]       # Number of pixels
-    field_npix = 64                 # Number of pixels in the lensing field
+    #nc         = [64, 64, 256]       # Number of pixels
+    nc         = [8, 8, 64]       # Number of pixels
+    field_npix = 128                 # Number of pixels in the lensing field
     sigma_e    = 0.0000                 # Standard deviation of galaxy ellipticities
     galaxy_density = 10.             # Galaxy density per arcmin^2, per redshift bin
 
     #field_size = jnp.arctan2(box_size[-1],box_size[0])/np.pi*180  
-    field_size = jnp.arctan2(box_size[0],box_size[-1])/np.pi*180                  # Size of the lensing field in degrees
+    field_size =  2.86#jnp.arctan2(box_size[0],box_size[-1])/np.pi*180                  # Size of the lensing field in degrees
     print('field size is %.2fdeg x %.2fdeg'%(field_size,field_size) )
     # Sampling cosmological parameters and defines cosmology
     # Note that the parameters are shifted so e.g. Omega_c=0 means Omega_c=0.25
@@ -268,11 +279,15 @@ def forward_model(data = None):
     # Generate density planes through an nbody
     # Here the density_plane_npix doesn't have to match the npix of lensing map
     # but probably should be higher. Same with density_plane_width.
+
+    field  = numpyro.sample('initial_conditions', dist.Normal(jnp.zeros(nc) ,jnp.ones(nc) ) )
+
     density_planes = get_density_planes(cosmo, box_size=box_size, nc=nc,
                                                neural_spline_params = params,
                                                density_plane_npix = 512,
                                                density_plane_smoothing = 0.75,
-                                               density_plane_width = 100.
+                                               density_plane_width = 100.,
+                                               field=field
                                         )
 
     # Defining the coordinate grid for lensing map
@@ -319,35 +334,35 @@ fiducial_model = numpyro.handlers.condition(forward_model, {'omega_c': 0., 'sigm
 
 #import pdb;pdb.set_trace()
 # Sample a mass map and save corresponding true parameters
-model_trace    = numpyro.handlers.trace(numpyro.handlers.seed(fiducial_model, jax.random.PRNGKey(42))).get_trace()
+model_trace    = numpyro.handlers.trace(numpyro.handlers.seed(fiducial_model, jax.random.PRNGKey(42))).get_trace( )
 
 np.save('fidcucial_kappa.npy',model_trace['kappa_0']['value'])
-import pdb; pdb.set_trace()
+#import pdb; pdb.set_trace()
 
 # ok, cool, now let's sample this posterior
-observed_model = numpyro.handlers.condition(forward_model, {'kappa_0': model_trace['kappa_0']['value']})
-observed_model_reparam = observed_model # reparam(observed_model, config=config)
+#observed_model = numpyro.handlers.condition(forward_model, {'kappa_0': model_trace['kappa_0']['value']})
+#observed_model_reparam = observed_model # reparam(observed_model, config=config)
 
 # Set up the NUT sampler
 nuts_kernel = numpyro.infer.NUTS(
-                                 model = observed_model_reparam,
+                                 model = forward_model,#observed_model_reparam,
                                  init_strategy  = partial(numpyro.infer.init_to_value, values={'omega_c': 0., 'sigma_8': 0. }),
-                                 max_tree_depth = 3,
-                                 step_size      = 2e-2
+                                 #max_tree_depth = 1,
+                                 #step_size      = 2e-2
                                 )
 
 # Run the sampling 
 mcmc = numpyro.infer.MCMC(
                           nuts_kernel,
-                          num_warmup=1000,
-                          num_samples=10000,
-                          chain_method="parallel", num_chains=4,
+                          num_warmup=500,
+                          num_samples=5000,
+                          # chain_method="parallel", num_chains=1,
                           # thinning=2,
                           progress_bar=True
                          )
 
 print("---------------STARTING SAMPLING-------------------")
-mcmc.run(jax.random.PRNGKey(0),model_trace['kappa_0']['value'])
+mcmc.run( jax.random.PRNGKey(0) ,model_trace['kappa_0']['value'])
 print("-----------------DONE SAMPLING---------------------")
 
 res = mcmc.get_samples()
@@ -358,6 +373,7 @@ res = mcmc.get_samples()
 # Saving an intermediate checkpoint
 with open('lensing_fwd_mdl_nbody_0.pickle', 'wb') as handle:
     pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
 
 # Resuming from a checkpoint above
 for i in range(4):
