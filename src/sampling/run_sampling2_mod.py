@@ -1,5 +1,5 @@
 import os,sys
-#os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION']='.95'
+os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION']='.95'
 import h5py, pickle, jax, jaxpm, numpyro, diffrax
 import haiku as hk
 import numpy as np
@@ -260,7 +260,7 @@ def forward_model( data = None):
     box_size   = [200., 200., 4000.] # In Mpc/h
     #nc         = [64, 64, 256]       # Number of pixels
     nc         = [8, 8, 64]       # Number of pixels
-    field_npix = 128                 # Number of pixels in the lensing field
+    field_npix = 16                 # Number of pixels in the lensing field
     sigma_e    = 0.0000                 # Standard deviation of galaxy ellipticities
     galaxy_density = 10.             # Galaxy density per arcmin^2, per redshift bin
 
@@ -309,7 +309,9 @@ def forward_model( data = None):
     #for i,k in enumerate(convergence_maps):
     #print("Adding noise to zbin %d"%i)
     numpyro.deterministic('latent_image', kappa)
-    numpyro.sample('kappa_0', dist.Normal(kappa, sigma_e/jnp.sqrt(galaxy_density*(field_size*60/field_npix)**2)) ,obs=data) 
+    #sig = sigma_e/jnp.sqrt(galaxy_density*(field_size*60/field_npix)**2)
+    sig = jnp.ones((field_npix,field_npix))*0.015*0
+    numpyro.sample('kappa_0', dist.Normal(kappa, sig) ,obs=data) 
 
     #return observed_maps
 
@@ -337,7 +339,7 @@ fiducial_model = numpyro.handlers.condition(forward_model, {'omega_c': 0., 'sigm
 model_trace    = numpyro.handlers.trace(numpyro.handlers.seed(fiducial_model, jax.random.PRNGKey(42))).get_trace( )
 
 np.save('fidcucial_kappa.npy',model_trace['kappa_0']['value'])
-#import pdb; pdb.set_trace()
+import pdb; pdb.set_trace()
 
 # ok, cool, now let's sample this posterior
 #observed_model = numpyro.handlers.condition(forward_model, {'kappa_0': model_trace['kappa_0']['value']})
@@ -346,7 +348,7 @@ np.save('fidcucial_kappa.npy',model_trace['kappa_0']['value'])
 # Set up the NUT sampler
 nuts_kernel = numpyro.infer.NUTS(
                                  model = forward_model,#observed_model_reparam,
-                                 init_strategy  = partial(numpyro.infer.init_to_value, values={'omega_c': 0., 'sigma_8': 0. }),
+                                 #init_strategy  = partial(numpyro.infer.init_to_value, values={'omega_c': 0., 'sigma_8': 0. }),
                                  #max_tree_depth = 1,
                                  #step_size      = 2e-2
                                 )
@@ -354,8 +356,8 @@ nuts_kernel = numpyro.infer.NUTS(
 # Run the sampling 
 mcmc = numpyro.infer.MCMC(
                           nuts_kernel,
-                          num_warmup=500,
-                          num_samples=5000,
+                          num_warmup=100,
+                          num_samples=1000,
                           # chain_method="parallel", num_chains=1,
                           # thinning=2,
                           progress_bar=True
