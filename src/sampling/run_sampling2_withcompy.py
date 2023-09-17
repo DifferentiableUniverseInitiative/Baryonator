@@ -1,6 +1,6 @@
 import os,sys
 os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION']='.90'
-import h5py, pickle, jax, jaxpm, numpyro, diffrax
+import h5py, pickle, jax, jaxpm, numpyro, diffrax, torch, gpytorch
 import haiku as hk
 import numpy as np
 import astropy.units as u
@@ -18,8 +18,33 @@ from jaxpm.nn import NeuralSplineFourierFilter
 from jaxpm.utils import gaussian_smoothing
 from numpyro.handlers import seed, trace, condition, reparam
 #from diffrax import diffeqsolve, ODETerm, Dopri5, LeapfrogMidpoint, PIDController, SaveAt
+from jax.scipy.linalg import solve
+from jax.scipy.linalg import cho_solve, cho_factor
 
 from hpmtable3 import *
+
+import jax
+import jax.numpy as jnp
+import matplotlib.pyplot as plt
+import numpy as np
+
+# 2D RBF kernel
+def rbf_kernel(x1, x2, length_scale=1.4, variance=0.5):
+    # x1, x2 have shape [num_samples, 2]
+    delta = x1[:, None, :] - x2[None, :, :]
+    squared_distance = jnp.sum(delta ** 2, axis=-1)
+    return variance * jnp.exp(-0.5 * squared_distance / (length_scale ** 2))
+
+# GP posterior
+def gp_posterior(X_train, y_train, X_test, kernel_func, noise_variance=4e-5):
+    K = kernel_func(X_train, X_train) + noise_variance * jnp.eye(X_train.shape[0])
+    Ks = kernel_func(X_train, X_test)
+    Kss = kernel_func(X_test, X_test)
+
+    K_inv = jnp.linalg.inv(K)
+    mu_s = jnp.dot(Ks.T, jnp.dot(K_inv, y_train))
+
+    return mu_s
 
 # Function to create k-grid
 def create_kgrid(nx, ny, nz, lx, ly, lz):
@@ -66,7 +91,6 @@ def HPM_GPmodel(cosmo,a,delta,psi,logMmin=8,logMmax=16,NM=40,rmin=0.1,rmax=4,Nr=
     P   : float, arr
      Pressure in units of [Msun/s^2/Mpc]
     """
-    
     mH_cgs  = 1.67223e-24
     
     icm = {}
@@ -81,8 +105,8 @@ def HPM_GPmodel(cosmo,a,delta,psi,logMmin=8,logMmax=16,NM=40,rmin=0.1,rmax=4,Nr=
     icm['beta'] = 5.4905
 
     # Locations to interpolate AT 
-    index_points = jnp.array([jnp.log10(delta), jnp.log10(psi)]).T#.reshape([-1,2])
-    
+    index_points = jnp.array([jnp.log10(delta), jnp.log10(psi)]).T
+
     # First construct a table to map M/r -> rho/psi
     batched_r    = jax.vmap(table_halo,in_axes=[None, None, None, None, 0])
     batched_Mr   = jax.vmap(batched_r, in_axes=[None,None,None,0,None])
@@ -96,71 +120,24 @@ def HPM_GPmodel(cosmo,a,delta,psi,logMmin=8,logMmax=16,NM=40,rmin=0.1,rmax=4,Nr=
     tabM,tabR,_,_,tabrho,tabpsi,tabT,tabP = res
     del res
     
-    print("hpmtable min psi: %.6e"%(np.min(tabpsi)))
-    print("hpmtable max psi: %.6e"%(np.max(tabpsi)))
-
     #Compute mean matter density in Msun/Mpc^3 to convert rho->delta
     rhom0    = jc.background.Omega_m_a(cosmo,1.0)*jc.constants.rhocrit*cosmo.h**2 # [(M_sun)/ (Mpc)^{3}]
     rhommean = rhom0*(a)**-3
-    print("hpmtable rhomean: %.6e"%(rhommean))
-
+    
     _delta  = jnp.log10(tabrho).flatten(); del tabrho
     _psi    = jnp.log10(tabpsi).flatten(); del tabpsi
     _T      = jnp.log10(tabT).flatten()  ; del tabT
     _P      = jnp.log10(tabP).flatten()  ; del tabP #
 
-    test_dp  = torch.from_numpy(np.array([jnp.log10(delta), jnp.log10(psi)], dtype=np.float32).T ).float()
-    train_dp = torch.from_numpy(np.array(np.c_[_delta,_psi], dtype=jnp.float32) ).float()
-    train_T  = torch.from_numpy(np.array(_T, dtype=jnp.float32) ).float()
-    train_P  = torch.from_numpy(np.array(_P, dtype=jnp.float32) ).float() 
+    X_train = jnp.array(jnp.c_[_delta,_psi])
+    T_train = jnp.array(_T)
 
-    #Testing 
-    #interp_T = GP_intp(train_dp,train_T,train_dp)
-    #interp_P = GP_intp(train_dp,train_P,train_dp)
-    #print(_T,interp_T)
-    #print(_P,interp_P)
+    delta   = jnp.where(jnp.log10(delta)<7, 1e7, delta)
+    X_test  = jnp.array(jnp.c_[jnp.log10(delta), jnp.log10(psi)])
+    
+    interp_T = gp_posterior(X_train, T_train, jnp.c_[X_test[:,0],X_test[:,1]], rbf_kernel)
+    return  jnp.asarray(10**interp_T)
 
-    interp_T = GP_intp(train_dp,train_T,test_dp) #K
-    interp_P = GP_intp(train_dp,train_P,test_dp) #(Msun/s^2/Mpc)
-
-    return np.asarray(10**interp_T), np.asarray(10**interp_P)
-
-
-def GP_intp(train_x,train_y,test_x):
-   
-    # Initialize the model and likelihood
-    likelihood = gpytorch.likelihoods.GaussianLikelihood()
-    model      = GPModel(train_x, train_y, likelihood)
-
-    # Training the model
-    model.train()
-    likelihood.train()
-
-    # Use the adam optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
-
-    # "Loss" for GPs - the marginal log likelihood
-    mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
-
-    training_iter = 50
-    for i in range(training_iter):
-        optimizer.zero_grad()
-        output = model(train_x)
-        loss = -mll(output, train_y)
-        loss.backward()
-        optimizer.step()
-
-    # Switch model and likelihood to eval mode
-    model.eval()
-    likelihood.eval()
-
-    # Test data
-    with torch.no_grad(), gpytorch.settings.fast_pred_var():
-        observed_pred = likelihood(model(test_x))
-        mean = observed_pred.mean
-        var  = observed_pred.variance
-
-    return mean
 
 # Function to generate intial conditions
 def linear_field(mesh_shape, box_size, pk, field ):
@@ -169,24 +146,10 @@ def linear_field(mesh_shape, box_size, pk, field ):
   box_size   : list of 3 numbers in units of Mpc/h [100,100,4000]
   pk         : power spectrum to generate initial condition from. 
   """
-  #print(rng_key.shape)
-  #import pdb;pdb.set_trace()
   kvec   = jaxpm.kernels.fftk(mesh_shape)
   kk     = jnp.sqrt(sum((ki / jnp.pi)**2 for ki in kvec))
   kmesh  = sum((kk / box_size[i] * mesh_shape[i])**2 for i, kk in enumerate(kvec))**0.5
   pkmesh = pk(kmesh) * (mesh_shape[0] * mesh_shape[1] * mesh_shape[2]) / (box_size[0] * box_size[1] * box_size[2])
-
-  # This is one of the variables (although it's a 3d grid) we are sampling over 
-  print('---------------------------------------------------------------------')
-  #print(rng_key_init.shape)
-  #rng_key1, rng_key2 = jax.random.split(rng_key)
-  #rng_key = numpyro.prng_key()
-  #rng_key1, rng_key2 = jax.random.split( numpyro.prng_key() )
-  
-  #mu = jnp.zeros(mesh_shape)
-  #s  = jnp.ones(mesh_shape)
-  #field  = numpyro.sample('initial_conditions',dist.Normal(mu,s) )
-
   field  = jnp.fft.rfftn(field) * pkmesh**0.5
   field  = jnp.fft.irfftn(field)
   return field
@@ -226,11 +189,11 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
     chi        = jnp.linspace(0., box_size[-1], n_lens + 1)
     chi_center = 0.5 * (chi[1:] + chi[:-1])
     print("These planes correspond to comoving distances (in Mpc/h):")
-    print(chi_center) 
+    #print(chi_center) 
 
     #a_center = jc.background.a_of_chi(cosmology, chi_center)
     #print("Converted into scale factor (unitless):")
-    a_center = jnp.array([0.98366934, 0.95173067, 0.92167276, 0.89296484, 0.86550933, 0.83921653,
+    a_center = jnp.array([0.97366934, 0.95173067, 0.92167276, 0.89296484, 0.86550933, 0.83921653,
                           0.81368816, 0.78958046, 0.76639086, 0.7440582,  0.72252566, 0.7017416,
                           0.6816582,  0.66223156, 0.6434214,  0.6251906,  0.6075051,  0.59033346,
                           0.5734545,  0.55725896, 0.54149497, 0.5261407,  0.5111752,  0.49658,
@@ -238,7 +201,7 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
                           0.40336218, 0.3912276,  0.37934503, 0.36770567, 0.35630164, 0.3451253,
                           0.33416978, 0.32338104, 0.31288064, 0.30258247])
 
-    print(a_center)
+    #print(a_center)
 
     # Create a small function to generate the matter power spectrum
     kh    = jnp.logspace(-4, 1, 256)                    # h/Mpc
@@ -263,7 +226,7 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
         state is a tuple (position, velocities ) in internal units: [grid units, v=\frac{a^2}{H_0}\dot{x}]
         See this link for conversion rules: https://github.com/fastpm/fastpm#units
         """
-        cosmo, params = args
+        cosmo, params, _ = args
         pos = state[0]
         vel = state[1]
 
@@ -309,8 +272,6 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
         positions  = y[0]
         nx, ny, nz = nc
 
-        #import pdb; pdb.set_trace()
-
         # Converts time t to comoving distance in voxel coordinates
         w      = density_plane_width / box_size[2] * nc[2]
         center = jc.background.radial_comoving_distance(cosmo, a_plane) / box_size[2] * nc[2]
@@ -328,10 +289,10 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
         # Selecting only particles that fall inside the volume of interest
         weight = jnp.where((d > (center - w / 2)) & (d <= (center + w / 2)), 1., 0.)
 
-        # Painting density plane
+        # Painting density plane. This is number of particles per voxel.
         density_plane = cic_paint_2d(jnp.zeros([density_plane_npix, density_plane_npix]), xy, weight)
 
-        # Apply density normalization
+        # Apply density normalization. Still in units of particles/voxel
         density_plane = density_plane / ( (nx / density_plane_npix) * (ny / density_plane_npix) * w )
         
         # Add Temperature 
@@ -340,7 +301,7 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
         # We want to first compute the full 3D density and fscalar field
         ####---->total_mass_egd
         G     = 4.390334603328476e-12 # (km)(Mpc^2)/Msun/s/Gyr
-        Mpart = 1e11                  # [Msun/h] ?????????????????????????????????????
+        Mpart = 1e14                 # [Msun/h] ?????????????????????????????????????
 
         vol_voxel  = (box_size[0]/nc[0] * box_size[1]/nc[1]*box_size[2]/nc[2] )/cosmo.h**3 # [Mpc^3]
         
@@ -351,31 +312,28 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
 
         F_rhom     = jnp.fft.fftshift(jnp.fft.fftn((M_grid/vol_voxel) ))  #[(Msun)/(Mpc)^3]
         kg         = create_kgrid(M_grid.shape[0], M_grid.shape[1], M_grid.shape[2], lx=box_size[0], ly=box_size[1], lz=box_size[2])
-        #import pdb; pdb.set_trace()
-        #kg         = kg.at[kg==0].set(jnp.inf)
-        jnp.where(kg == 0, jnp.inf, kg)
+
+        kg = jnp.where(kg == 0, jnp.inf, kg)
 
         F_fscalar  = 2*jnp.pi**2*(G)*F_rhom/kg*1.989*3.24**2*1e-16*100*cosmo.h   # [cm/s^2] -- in units of HPM table
         R_fscalar  = jnp.fft.ifftn(jnp.fft.ifftshift(F_fscalar)) 
         R_fscalar -= jnp.min(R_fscalar.real)  
-        R_fscalar  = R_fscalar 
-
-     
+        
         # We assign a value of density and fscalar to each particle from their possitions 
         fscalar_pos = cic_read(R_fscalar.real  , positions)
         delta_pos   = cic_read(M_grid/vol_voxel, positions)
-        #import pdb; pdb.set_trace()
-           
+
         if return_temperature==True:
             # Return both density and temperature
+            T = HPM_GPmodel(cosmo, a_plane, delta_pos, fscalar_pos)
             #import pdb; pdb.set_trace()
-            T,_ = HPM_GPmodel(cosmo, a_plane, delta_pos, fscalar_pos)
-            #temperature_plane = cic_paint_2d(jnp.zeros([density_plane_npix, density_plane_npix]), xy, T)
+            temperature_plane = cic_paint_2d(jnp.zeros([density_plane_npix, density_plane_npix]), xy, T)
+            #mass_plane        = cic_paint_2d(jnp.zeros([density_plane_npix, density_plane_npix]), xy, delta_pos)
 
-            return density_plane#, temperature_plane
+            return density_plane, temperature_plane
 
         else:
-            # Return density plane onlu
+            # Return density plane only
             return density_plane
         
         return density_plane  
@@ -404,13 +362,16 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
 
     # Apply some amount of gaussian smoothing defining the effective resolution of the density planes
     print('Applying smoothing')
-    density_plane = jax.vmap(lambda x: gaussian_smoothing(x,  density_plane_smoothing / dx ))(solution.ys)
+    density_plane = jax.vmap(lambda x: gaussian_smoothing(x,  density_plane_smoothing / dx ))(solution.ys[0])
     print('Done applying smoothing')
 
     if return_temperature == True:
         print('Extracting temperature planes')
         print('Applying smoothing')
-        temperature_plane = jax.vmap(lambda x: gaussian_smoothing(x,  density_plane_smoothing / dx ))(solution.ys)
+        #temperature_plane = jax.vmap(lambda x: gaussian_smoothing(x,  density_plane_smoothing / dx ))(solution.ys[1])
+        #mass_plane = solution.ys[1]#DEBUG
+        temperature_plane = solution.ys[1]#DEBUG
+        print(temperature_plane)
         print('Done applying smoothing')
 
     print('Saving dict')
@@ -423,7 +384,8 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
             }
     
     if return_temperature == True:
-        pdict.update({'Tplanes': temperature_plane[::-1],})
+        #pdict.update({'Mplanes': mass_plane[::-1]})
+        pdict.update({'Tplanes': temperature_plane[::-1]})
 
     return pdict
 
@@ -470,7 +432,7 @@ def convergence_Born(cosmo, density_planes, coords , z_source):
     return convergence
 
 
-def comptony_Born(cosmo, density_planes, temperature_planes, coords , z_source):
+def comptony_Born(cosmo, planes, coords , z_source):
     """
     Compute the Born convergence
     Args:
@@ -482,6 +444,7 @@ def comptony_Born(cosmo, density_planes, temperature_planes, coords , z_source):
         `Tensor` of shape [batch_size, N, Nz], of convergence values.
     """
     # Compute constant prefactor:
+    '''
     mp     = 1.6726219e-27      # [kg]
     msun   = 1.98847e30         # [kg]
     mpc2m  = 3.085677581e22     # [m]
@@ -491,33 +454,42 @@ def comptony_Born(cosmo, density_planes, temperature_planes, coords , z_source):
 
     c = 299792458
     A = 3 / 2 * cosmo.Omega_m * (cosmo.h*100 / c)**2
+    '''
+    Mpart=1e13
 
     # Compute comoving distance of source galaxies
     chi_s = jc.background.radial_comoving_distance(cosmo, 1 / (1 + z_source))
 
     comptony = 0
-    n_planes = len(density_planes['planes'])
+    n_planes = len(planes['planes'])
 
-    dx = density_planes['dx']
-    dz = density_planes['dz']
+    dx = planes['dx']
+    dz = planes['dz']
 
+    print("Starting Compton-y integration")
     for i in range(n_planes):
 
-        chi  = density_planes['chi'][i]
-        a    = density_planes['a'][i]
-        d    = density_planes['planes'][i]     # [Msol/h]/[(Mpc/h)^3]
-        tgas = temperature_planes['planes'][i] # [K]
+        chi  = planes['chi'][i]
+        a    = planes['a'][i]
+        d    = planes['planes'][i]  # [Msol/h]/[(Mpc/h)^3]
+        tgas = planes['Tplanes'][i] # [K]
+        Mgas = d*Mpart
 
-        # Normalize density planes
-        #p = (p - p.mean()) * A * dz * chi / a 
-        rhogas = d                                                  # [Msol/h]/[(Mpc/h)^3]
-        pe     = rhogas/(mp/msun)/mue/(mpc2m)**3*cosmo.h**2*kb*tgas # [1/m^3 (phys) m^2/s^2 kg], no more factors of h
+        rhogas = Mgas                   # [Msun/h]/[(Mpc/h)^3]
+        const1 = 2.9291000381540527e-11 # (mp/msun)/mue/(mpc2m)**3*kb*m2mpc   precomputed factor to avoid float32 overflow
+                                        # -> 1.988e30/(3.086e22)**3*1.38e-23/0.588/1.6726e-27*3.086e22  [kg/Mpc/s^2/K]
 
+        #pe     = rhogas/(mp/msun)/mue/(mpc2m)**3*cosmo.h**2*kb*tgas # [1/m^3 (phys) m^2/s^2 kg], no more factors of h
+        pe     = rhogas*cosmo.h**2*const1*tgas # [kg/Mpc/s^2] , no more factors of h
+        A      = 8.125459939612701e-16 #sigT/(me*c*c)  6.6524e-29/9.1093837e-31/299792458**2 # [s^2/kg]
+        
         # Interpolate at the density plane coordinates
-        im = map_coordinates(pe, coords * chi / dx - 0.5, order=1, mode="wrap")
+        im = map_coordinates(A*pe*dz, coords * chi / dx - 0.5, order=1, mode="wrap")
+        comptony += im * jnp.clip(1. - (chi / chi_s), 0, 1000).reshape([-1, 1, 1]) 
+        #im = map_coordinates(tgas, coords * chi / dx - 0.5, order=1, mode="wrap")
+        #comptony += im * jnp.clip(1. - (chi / chi_s), 0, 1000).reshape([-1, 1, 1])       
 
-        comptony += im * jnp.clip(1. - (chi / chi_s), 0, 1000).reshape([-1, 1, 1])
-
+    print("Done Compton-y integration")
     return comptony
 
 
@@ -557,18 +529,16 @@ def forward_model(data = None):
 
     field  = numpyro.sample('initial_conditions', dist.Normal(jnp.zeros(nc) ,jnp.ones(nc) ) )
 
-    density_planes, temperature_planes = get_density_planes(
-                                                            cosmo, nc = nc,
-                                                            box_size = box_size, 
-                                                            neural_spline_params = params,
-                                                            density_plane_npix = 512,
-                                                            density_plane_smoothing = 0.75,
-                                                            density_plane_width = 100.,
-                                                            field = field,
-                                                            return_temperature = return_temperature
-                                                           )
-
-
+    planes = get_density_planes(
+                                cosmo, nc = nc,
+                                box_size = box_size, 
+                                neural_spline_params = params,
+                                density_plane_npix = 512,
+                                density_plane_smoothing = 0.75,
+                                density_plane_width = 100.,
+                                field = field,
+                                return_temperature = return_temperature
+                                )
     
     # Defining the coordinate grid for lensing map
     xgrid, ygrid = jnp.meshgrid(jnp.linspace(0, field_size, field_npix, endpoint=False), # range of X coordinates
@@ -577,22 +547,20 @@ def forward_model(data = None):
     coords = jnp.array((jnp.stack([xgrid, ygrid], axis=0))*0.017453292519943295 ) # deg->rad
 
     # Generate convergence maps by integrating over nz and source planes
-    #convergence_maps = []
     for i,nz in enumerate(nz_shear):
     #print("Making convergence map zbin %d"%i)
-        kappa =  simps(lambda z: nz(z).reshape([-1,1,1]) * convergence_Born(cosmo, density_planes, coords, z), 0.01, 1.0, N=32)
-        numpyro.deterministic('noiseless_convergence_%d', kappa)
-        
+        kappa =  simps(lambda z: nz(z).reshape([-1,1,1]) * convergence_Born(cosmo, planes, coords, z), 0.01, 1.0, N=32)
+        numpyro.deterministic('noiseless_convergence_%d'%i, kappa)
+
         sig = jnp.ones((field_npix,field_npix))*0.015*3e-7
         numpyro.sample('kappa_0', dist.Normal(kappa, sig) ,obs=data) 
     
 
     if compy==True:
         print("Integrating along the LOS to create Compton-y map")
-        compy =  simps(lambda z: nz(z).reshape([-1,1,1]) * comptony_Born(cosmo, temperature_planes, coords, z), 0.01, 1.0, N=32)
+        compy =  simps(lambda z: comptony_Born(cosmo, planes, coords, z), 0.03, 1.00, N=32)
         numpyro.deterministic('noiseless_comptony', compy)
-        numpyro.sample('compy', dist.Normal(compy, sig) ,obs=data) 
-
+        
     #sig = sigma_e/jnp.sqrt(galaxy_density*(field_size*60/field_npix)**2)
     #sig = jnp.ones((field_npix,field_npix))*0.015*3e-7
     #numpyro.sample('kappa_0', dist.Normal(kappa, sig) ,obs=data) 
@@ -622,7 +590,9 @@ fiducial_model = numpyro.handlers.condition(forward_model, {'omega_c': 0., 'sigm
 # Sample a mass map and save corresponding true parameters
 model_trace    = numpyro.handlers.trace(numpyro.handlers.seed(fiducial_model, jax.random.PRNGKey(42))).get_trace( )
 
-#np.save('fidcucial_kappa.npy',model_trace['kappa_0']['value'])
+np.save('fidcucial_kappa_0.npy',model_trace['noiseless_convergence_0']['value'])
+np.save('fidcucial_compy_0.npy',model_trace['noiseless_comptony']['value'])
+
 #import sys; sys.exit()
 #import pdb; pdb.set_trace()
 
@@ -642,8 +612,8 @@ nuts_kernel = numpyro.infer.NUTS(
 mcmc = numpyro.infer.MCMC(
                           nuts_kernel,
                           num_warmup=2,
-                          num_samples=1000,
-                           chain_method="parallel", num_chains=4,
+                          num_samples=4,
+                          # chain_method="parallel", num_chains=1,
                           # thinning=2,
                           progress_bar=True
                          )
@@ -653,15 +623,12 @@ mcmc.run( jax.random.PRNGKey(0) ,model_trace['kappa_0']['value'])
 print("-----------------DONE SAMPLING---------------------")
 
 res = mcmc.get_samples()
-#mcmc.print_summary()
-#np.save('/pscratch/sd/y/yomori/omegac.npy',res['omega_c'])
-#np.save('/pscratch/sd/y/yomori/sigma_8.npy',res['sigma_8'])
 
 # Saving an intermediate checkpoint
 with open('lensing_fwd_mdl_nbody_0.pickle', 'wb') as handle:
     pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-
+'''
 # Resuming from a checkpoint above
 for i in range(10):
     print('round',i,'done')
@@ -670,3 +637,4 @@ for i in range(10):
     res = mcmc.get_samples()
     with open('lensing_fwd_mdl_nbody_%d.pickle'%(i+1), 'wb') as handle:
         pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
+'''
