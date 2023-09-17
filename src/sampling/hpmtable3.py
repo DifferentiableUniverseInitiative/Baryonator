@@ -54,7 +54,7 @@ def c200c_nfw(cosmo,a, M200c,verbose=False):
 
     #neff_pk_fn = jax.grad(lambda k: jnp.log10(jc.power.linear_matter_power(cosmo, k) )) #####<_---- different answer
     #jc.power.linear_matter_power(cosmo, k)/2/np.pi**2*k**3 <--- need some scaling of k
-    n          = neff_pk_fn(cosmo,k/cosmo.h) 
+    n          = neff_pk_fn(cosmo,k/cosmo.h)
     #pdb.set_trace() 
     if verbose: print('n',n)
     #--------XCHECK----------
@@ -74,7 +74,9 @@ def c200c_nfw(cosmo,a, M200c,verbose=False):
     #dlnk = jnp.log(k[1]/k[])/(k2-k1) #equivalent
     
     var    = jnp.sum(pk*tophat_transform(kR)**2*dlnk)
-    sigmaR = jnp.sqrt(var)*jc.background.growth_factor(cosmo, jnp.array([a])).item()
+    
+    #sigmaR = jnp.sqrt(var)*jc.background.growth_factor(cosmo, jnp.array([a])).item()
+    sigmaR = jnp.sqrt(var)*jnp.array(jc.background.growth_factor(cosmo, jnp.array([a])),float)[0]
     #pdb.set_trace()
     #kR = R*k
     #W  = 3.0*(jnp.sin(kR)/kR**3-jnp.cos(kR)/kR**2)
@@ -362,20 +364,20 @@ def table_halo(cosmo,a,icm,M,rx,verbose=False):
     #sys.exit()
     #M200c   = 10**((im-1)*self.lgMdel + self.lgMmin) / self.cosmo['h'] * Msun_cgs
     #R200c   = (M200c/1e30/(4*jnp.pi/3*(rho200c*1e30) ))**(1./3)*(1.e30)**(1./3)*(1.e30)**(1./3) # avoid float64
-    R200c   = ( M200c/(4*np.pi/3*rho200c) ) **(1./3) # [Mpc]
+    R200c   = ( M200c/(4*jnp.pi/3*rho200c) ) **(1./3) # [Mpc]
     #pdb.set_trace()
     if verbose: print('R200c',R200c)
     #--------XCHECK----------
     # this : 8.457399482718055e+23
     # hyper: 8.456419471688975E+023
-
+    
     c200c   = c200c_nfw(cosmo,a,M200c) #<---- still room for improvement
     #pdb.set_trace()
     if verbose: print('c200c',c200c)
     #--------XCHECK----------
     # this : 8.625189
     # hyper: 8.61719816540954  
-
+   
     rs      = R200c/c200c
     if verbose: print('rs',rs)
     #--------XCHECK----------
