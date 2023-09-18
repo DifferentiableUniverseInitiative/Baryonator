@@ -628,6 +628,11 @@ res = mcmc.get_samples()
 with open('lensing_fwd_mdl_nbody_0.pickle', 'wb') as handle:
     pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
+#Also save loglikelihood of a given map. How to make this joint with compy?
+lglike = numpyro.infer.util.log_likelihood(forward_model,res,model_trace['kappa_0']['value'])
+with open('loglike_lensing_fwd_mdl_nbody_0.pickle', 'wb') as handle:
+    pickle.dump(lglike, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
 '''
 # Resuming from a checkpoint above
 for i in range(10):
