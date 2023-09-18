@@ -633,7 +633,7 @@ lglike = numpyro.infer.util.log_likelihood(forward_model,res,model_trace['kappa_
 with open('loglike_lensing_fwd_mdl_nbody_0.pickle', 'wb') as handle:
     pickle.dump(lglike, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-'''
+
 # Resuming from a checkpoint above
 for i in range(10):
     print('round',i,'done')
@@ -642,4 +642,3 @@ for i in range(10):
     res = mcmc.get_samples()
     with open('lensing_fwd_mdl_nbody_%d.pickle'%(i+1), 'wb') as handle:
         pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
-'''
