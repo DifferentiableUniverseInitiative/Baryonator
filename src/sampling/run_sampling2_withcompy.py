@@ -28,6 +28,15 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 
+# Joint loglikelihood of a given map.
+def compute_logprob(conditioned_model, res):
+    log_probs = []
+    for i in range(res['sigma_8'].shape[0]):
+        params_i = {k: v[i] for k, v in res.items()}
+        log_prob, _ = numpyro.infer.util.log_density(conditioned_model, (), {}, params=params_i)
+        log_probs.append(log_prob)
+    return jnp.array(log_probs)
+
 # 2D RBF kernel
 def rbf_kernel(x1, x2, length_scale=1.4, variance=0.5):
     # x1, x2 have shape [num_samples, 2]
@@ -132,7 +141,7 @@ def HPM_GPmodel(cosmo,a,delta,psi,logMmin=8,logMmax=16,NM=40,rmin=0.1,rmax=4,Nr=
     X_train = jnp.array(jnp.c_[_delta,_psi])
     T_train = jnp.array(_T)
 
-    delta   = jnp.where(jnp.log10(delta)<7, 1e7, delta)
+    #delta   = jnp.where(jnp.log10(delta)<7, 1e7, delta)
     X_test  = jnp.array(jnp.c_[jnp.log10(delta), jnp.log10(psi)])
     
     interp_T = gp_posterior(X_train, T_train, jnp.c_[X_test[:,0],X_test[:,1]], rbf_kernel)
@@ -180,19 +189,21 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
     """
     # Initial scale factor for the simulation
     a_init = 0.01
-    print("Setting initial redshift to %.2f"%a_init)
+    #print("Setting initial redshift to %.2f"%a_init)
 
     # Planning out the scale factor stepping to extract desired lensplanes
     n_lens     = int(box_size[-1] // density_plane_width)
-    print("Splitting box with depth %dMpc/h into shells with thickness %dMpc/h -> %d planes"%(box_size[-1], density_plane_width, n_lens) )
+    #print("Splitting box with depth %dMpc/h into shells with thickness %dMpc/h -> %d planes"%(box_size[-1], density_plane_width, n_lens) )
 
     chi        = jnp.linspace(0., box_size[-1], n_lens + 1)
     chi_center = 0.5 * (chi[1:] + chi[:-1])
-    print("These planes correspond to comoving distances (in Mpc/h):")
-    #print(chi_center) 
-
-    #a_center = jc.background.a_of_chi(cosmology, chi_center)
+    #print("These planes correspond to comoving distances (in Mpc/h):")
+    
+    # Make sure scale factor is within the range of the neural spline
+    a_center = jc.background.a_of_chi(cosmology, chi_center)
+    a_center = jnp.clip(a_center, 0.25, 0.97)
     #print("Converted into scale factor (unitless):")
+    '''
     a_center = jnp.array([0.97366934, 0.95173067, 0.92167276, 0.89296484, 0.86550933, 0.83921653,
                           0.81368816, 0.78958046, 0.76639086, 0.7440582,  0.72252566, 0.7017416,
                           0.6816582,  0.66223156, 0.6434214,  0.6251906,  0.6075051,  0.59033346,
@@ -200,7 +211,7 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
                           0.4823374,  0.46843132, 0.4548467,  0.44156992, 0.42858812, 0.41588944,
                           0.40336218, 0.3912276,  0.37934503, 0.36770567, 0.35630164, 0.3451253,
                           0.33416978, 0.32338104, 0.31288064, 0.30258247])
-
+    '''
     #print(a_center)
 
     # Create a small function to generate the matter power spectrum
@@ -327,7 +338,7 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
             # Return both density and temperature
             T = HPM_GPmodel(cosmo, a_plane, delta_pos, fscalar_pos)
             #import pdb; pdb.set_trace()
-            temperature_plane = cic_paint_2d(jnp.zeros([density_plane_npix, density_plane_npix]), xy, T)
+            temperature_plane = cic_paint_2d(jnp.zeros([density_plane_npix, density_plane_npix]), xy, T*weight)
             #mass_plane        = cic_paint_2d(jnp.zeros([density_plane_npix, density_plane_npix]), xy, delta_pos)
 
             return density_plane, temperature_plane
@@ -357,8 +368,8 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
 
     dx = box_size[0] / density_plane_npix
     dz = density_plane_width
-    print("voxel size in xy direction: %.1f Mpc/h"%dx )
-    print("voxel size in z  direction: %.1f Mpc/h"%dz )
+    #print("voxel size in xy direction: %.1f Mpc/h"%dx )
+    #print("voxel size in z  direction: %.1f Mpc/h"%dz )
 
     # Apply some amount of gaussian smoothing defining the effective resolution of the density planes
     print('Applying smoothing')
@@ -368,13 +379,10 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
     if return_temperature == True:
         print('Extracting temperature planes')
         print('Applying smoothing')
-        #temperature_plane = jax.vmap(lambda x: gaussian_smoothing(x,  density_plane_smoothing / dx ))(solution.ys[1])
-        #mass_plane = solution.ys[1]#DEBUG
         temperature_plane = solution.ys[1]#DEBUG
-        print(temperature_plane)
         print('Done applying smoothing')
 
-    print('Saving dict')
+    print('Saving dict of density (and temperature) planes')
     pdict = {'planes': density_plane[::-1],
              'a'     : solution.ts[::-1],
              'a2'    : a_center,
@@ -384,7 +392,6 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
             }
     
     if return_temperature == True:
-        #pdict.update({'Mplanes': mass_plane[::-1]})
         pdict.update({'Tplanes': temperature_plane[::-1]})
 
     return pdict
@@ -485,7 +492,9 @@ def comptony_Born(cosmo, planes, coords , z_source):
         
         # Interpolate at the density plane coordinates
         im = map_coordinates(A*pe*dz, coords * chi / dx - 0.5, order=1, mode="wrap")
-        comptony += im * jnp.clip(1. - (chi / chi_s), 0, 1000).reshape([-1, 1, 1]) 
+        #print('----------------------------',i,im.shape)
+        #import pdb; pdb.set_trace()
+        comptony += im * jnp.ones_like(chi_s).reshape([-1, 1, 1]) #<-------Anything bellow and boave 0, 1000 gets set to 0 ,1000
         #im = map_coordinates(tgas, coords * chi / dx - 0.5, order=1, mode="wrap")
         #comptony += im * jnp.clip(1. - (chi / chi_s), 0, 1000).reshape([-1, 1, 1])       
 
@@ -494,11 +503,11 @@ def comptony_Born(cosmo, planes, coords , z_source):
 
 
 
-def forward_model(data = None):
+def forward_model():
     """
     This function defines the top-level forward model for our observations
     """
-    box_size   = [200., 200., 4000.] # In Mpc/h
+    box_size   = [256., 256., 2048.] # In Mpc/h
     #nc         = [64, 64, 256]       # Number of pixels
     nc         = [8, 8, 64]       # Number of pixels
     field_npix = 16                 # Number of pixels in the lensing field
@@ -511,11 +520,18 @@ def forward_model(data = None):
     else:
         return_temperature = False
 
-    #field_size = jnp.arctan2(box_size[-1],box_size[0])/np.pi*180  
-    field_size =  2.86#jnp.arctan2(box_size[0],box_size[-1])/np.pi*180                  # Size of the lensing field in degrees
+    # Assert that the resolution in each direction are equal
+    # (required by the neural spline code)
+    assert box_size[0]/nc[0] ==  box_size[1]/nc[1] ==  box_size[2]/nc[2], "Resolution in each direction must be equal"
+
+    # Field size in degrees
+    field_size =  7.125
+    #field_size = jnp.arctan2(box_size[0],box_size[-1])/np.pi*180                 
     print('field size is %.2fdeg x %.2fdeg'%(field_size,field_size) )
+    
     # Sampling cosmological parameters and defines cosmology
     # Note that the parameters are shifted so e.g. Omega_c=0 means Omega_c=0.25
+    # This is to ensure that the parameter space is sampled evenly around the fiducial values.
     Omega_c = numpyro.sample('omega_c', dist.TruncatedNormal(0.,1, low=-1))*0.2 + 0.25
     sigma_8 = numpyro.sample('sigma_8', dist.Normal(0., 1.))*0.14 + 0.831
     Omega_b, h, n_s, w0 = 0.04, 0.7, 0.96, -1  # fixed parameters
@@ -548,27 +564,28 @@ def forward_model(data = None):
 
     # Generate convergence maps by integrating over nz and source planes
     for i,nz in enumerate(nz_shear):
-    #print("Making convergence map zbin %d"%i)
+        print("Integrating along the LOS to create convergence map")
         kappa =  simps(lambda z: nz(z).reshape([-1,1,1]) * convergence_Born(cosmo, planes, coords, z), 0.01, 1.0, N=32)
         numpyro.deterministic('noiseless_convergence_%d'%i, kappa)
 
-        sig = jnp.ones((field_npix,field_npix))*0.015*3e-7
-        numpyro.sample('kappa_0', dist.Normal(kappa, sig) ,obs=data) 
+        #sig = sigma_e/jnp.sqrt(galaxy_density*(field_size*60/field_npix)**2)
+        sig = jnp.ones((field_npix,field_npix))*0.015*3e-7 # FIX
+        numpyro.sample('kappa_0', dist.Normal(kappa, sig)) 
     
 
     if compy==True:
         print("Integrating along the LOS to create Compton-y map")
-        compy =  simps(lambda z: comptony_Born(cosmo, planes, coords, z), 0.03, 1.00, N=32)
+        compy =  simps(lambda z: comptony_Born(cosmo, planes, coords, z), 0.01, 1.0, N=32)
         numpyro.deterministic('noiseless_comptony', compy)
-        
-    #sig = sigma_e/jnp.sqrt(galaxy_density*(field_size*60/field_npix)**2)
-    #sig = jnp.ones((field_npix,field_npix))*0.015*3e-7
-    #numpyro.sample('kappa_0', dist.Normal(kappa, sig) ,obs=data) 
+
+        sig = jnp.ones((field_npix,field_npix)) # FIX Probably needs some fiddling around 
+        numpyro.sample('compy_0', dist.Normal(compy, sig)) 
     
     #return observed_maps
 
 
 #######################################################################################################################
+
 # Reading the DC2 tomographic bins into redshift distribution objects
 with h5py.File("shear_photoz_stack.hdf5") as f:
     source   = f["n_of_z"]["source"]
@@ -584,7 +601,10 @@ model = hk.without_apply_rng(hk.transform(lambda x, a: NeuralSplineFourierFilter
 # Condition the model on a given set of parameters
 # Condition here means fixing some of the cosmological parameters
 # Here we are setting omega_c and sigma_8 to fiducial values to make a simulated data vector
-fiducial_model = numpyro.handlers.condition(forward_model, {'omega_c': 0., 'sigma_8': 0.})
+fiducial_model = numpyro.handlers.condition(forward_model, {
+                                                            'omega_c': 0., 
+                                                            'sigma_8': 0.
+                                                           })
 
 #import pdb;pdb.set_trace()
 # Sample a mass map and save corresponding true parameters
@@ -593,46 +613,45 @@ model_trace    = numpyro.handlers.trace(numpyro.handlers.seed(fiducial_model, ja
 np.save('fidcucial_kappa_0.npy',model_trace['noiseless_convergence_0']['value'])
 np.save('fidcucial_compy_0.npy',model_trace['noiseless_comptony']['value'])
 
-#import sys; sys.exit()
-#import pdb; pdb.set_trace()
+# Condition the model (i.e. generate "data" model)
+observed_model = numpyro.handlers.condition(forward_model, {
+                                                            'kappa_0': model_trace['kappa_0']['value'],
+                                                            'compy_0': model_trace['compy_0']['value']
+                                                           }
+                                            )
 
-# ok, cool, now let's sample this posterior
-#observed_model = numpyro.handlers.condition(forward_model, {'kappa_0': model_trace['kappa_0']['value']})
-#observed_model_reparam = observed_model # reparam(observed_model, config=config)
-
-# Set up the NUT sampler
+# Setup the NUT sampler
 nuts_kernel = numpyro.infer.NUTS(
-                                 model = forward_model,#observed_model_reparam,
+                                 model = observed_model,
                                  #init_strategy  = partial(numpyro.infer.init_to_value, values={'omega_c': 0., 'sigma_8': 0. }),
-                                 #max_tree_depth = 1,
+                                 max_tree_depth = 5,
                                  #step_size      = 2e-2
                                 )
 
 # Run the sampling 
 mcmc = numpyro.infer.MCMC(
                           nuts_kernel,
-                          num_warmup=2,
-                          num_samples=4,
+                          num_warmup=10,
+                          num_samples=200,
                           # chain_method="parallel", num_chains=1,
                           # thinning=2,
                           progress_bar=True
                          )
 
 print("---------------STARTING SAMPLING-------------------")
-mcmc.run( jax.random.PRNGKey(0) ,model_trace['kappa_0']['value'])
+mcmc.run( jax.random.PRNGKey(0))
 print("-----------------DONE SAMPLING---------------------")
 
 res = mcmc.get_samples()
-
+#sys.exit()
 # Saving an intermediate checkpoint
 with open('lensing_fwd_mdl_nbody_0.pickle', 'wb') as handle:
     pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-#Also save loglikelihood of a given map. How to make this joint with compy?
-lglike = numpyro.infer.util.log_likelihood(forward_model,res,model_trace['kappa_0']['value'])
-with open('loglike_lensing_fwd_mdl_nbody_0.pickle', 'wb') as handle:
-    pickle.dump(lglike, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
+#Also save loglikelihood of a given map.
+log_probs = compute_logprob(observed_model, res)
+np.save('logprobs_lensing_fwd_mdl_nbody_0.npy',log_probs)
 
 # Resuming from a checkpoint above
 for i in range(10):
@@ -642,3 +661,9 @@ for i in range(10):
     res = mcmc.get_samples()
     with open('lensing_fwd_mdl_nbody_%d.pickle'%(i+1), 'wb') as handle:
         pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    log_probs = compute_logprob(observed_model, res)
+    np.save('logprobs_lensing_fwd_mdl_nbody_%d.npy'%(i+1),log_probs)
+
+# To open the pickle file use:
+#with open('lensing_fwd_mdl_nbody_0.pickle', 'rb') as handle:
+#    res2 = pickle.load(handle)
