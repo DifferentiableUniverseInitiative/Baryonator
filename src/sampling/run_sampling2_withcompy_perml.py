@@ -1,5 +1,5 @@
 import os,sys
-os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION']='.95'
+os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION']='.90'
 import h5py, pickle, jax, jaxpm, numpyro, diffrax#, torch, gpytorch
 import haiku as hk
 import numpy as np
@@ -22,6 +22,8 @@ from jax.scipy.linalg import solve
 from jax.scipy.linalg import cho_solve, cho_factor
 
 from hpmtable3 import *
+sys.path.append('../')
+from pspec_tools import *
 
 import jax
 import jax.numpy as jnp
@@ -514,10 +516,10 @@ def forward_model():
     """
     This function defines the top-level forward model for our observations
     """
-    box_size   = [258., 258., 2175.] # In Mpc/h
-    nc         = [86, 86, 725]       # Number of pixels
+    box_size   = [200., 200., 2000.] # In Mpc/h
+    nc         = [80, 80, 800]       # Number of pixels
     #nc         = [8, 8, 64]         # Number of pixels
-    field_npix = 80                  # Number of pixels in the lensing field
+    field_npix = 200                  # Number of pixels in the lensing field
     sigma_e    = 0.0000              # Standard deviation of galaxy ellipticities
     galaxy_density = 10.             # Galaxy density per arcmin^2, per redshift bin
     compy      = True
@@ -532,7 +534,7 @@ def forward_model():
     assert box_size[0]/nc[0] ==  box_size[1]/nc[1] ==  box_size[2]/nc[2], "Resolution in each direction must be equal"
 
     # Field size in degrees
-    field_size = 6.765
+    field_size = 5.71
     #field_size = jnp.arctan2(box_size[0],box_size[-1])/np.pi*180                 
     print('field size is %.2fdeg x %.2fdeg'%(field_size,field_size) )
     
@@ -589,7 +591,15 @@ def forward_model():
         #sig = sigma_e/jnp.sqrt(galaxy_density*(field_size*60/field_npix)**2)
         sig = jnp.ones((field_npix,field_npix))*0.015*3e-7 # FIX
         numpyro.sample('kappa_0', dist.Normal(kappa, sig)) 
-    
+
+        delta_ell = 50.
+        ell_max   = 2000.
+        pix_size  = (field_size*60)/field_npix
+        N         = field_npix
+        window = jnp.ones_like(kappa)
+        bell, cls_kappa = pspec(kappa,kappa,window,window,delta_ell,ell_max,pix_size,N)
+        numpyro.deterministic('ells', bell)
+        numpyro.deterministic('cls_noiseless_convergence_%d'%i, cls_kappa)
 
     if compy==True:
         print("Integrating along the LOS to create Compton-y map")
@@ -598,7 +608,8 @@ def forward_model():
 
         sig = jnp.ones((field_npix,field_npix)) # FIX Probably needs some fiddling around 
         numpyro.sample('compy_0', dist.Normal(compy, sig)) 
-    
+        bell, cls_compy = pspec(compy,compy,window,window,delta_ell,ell_max,pix_size,N)
+        numpyro.deterministic('cls_noiseless_comptony_%d'%i, cls_compy)
     #return observed_maps
 
 
@@ -650,8 +661,8 @@ nuts_kernel = numpyro.infer.NUTS(
 mcmc = numpyro.infer.MCMC(
                           nuts_kernel,
                           num_warmup=0,
-                          num_samples=10,
-                          # chain_method="parallel", num_chains=1,
+                          num_samples=3,
+                          #chain_method="parallel", num_chains=4,
                           # thinning=2,
                           progress_bar=True
                          )

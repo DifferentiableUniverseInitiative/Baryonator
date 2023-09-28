@@ -14,7 +14,7 @@ def pspec(map1, map2, mask1, mask2, delta_ell, ell_max, pix_size, N):
     # get the 2d fourier transform of the map
     F1    = jnp.fft.ifft2(jnp.fft.fftshift(map1*mask1))
     F2    = jnp.fft.ifft2(jnp.fft.fftshift(map2*mask2))
-    PSD   = jnp.fft.fftshift(jnp.real(np.conj(F1) * F2))
+    PSD   = jnp.fft.fftshift(jnp.real(jnp.conj(F1) * F2))
 
     # make an array to hold the power spectrum results
     N_bins = int(ell_max/delta_ell)
@@ -29,6 +29,6 @@ def pspec(map1, map2, mask1, mask2, delta_ell, ell_max, pix_size, N):
         u       = jnp.mean(PSD[idx])
         cls     = jnp.where(tmp == i,  u, cls)
 
-    nrm = jnp.mean(mask1*mask2)**0.5 / (N*N)**0.5 / (pix_size/60/180*np.pi)
+    nrm = jnp.mean(mask1*mask2)**0.5 / (N*N)**0.5 / (pix_size/60/180*jnp.pi)
 
     return ells, cls/nrm**2
