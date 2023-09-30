@@ -517,9 +517,9 @@ def forward_model():
     This function defines the top-level forward model for our observations
     """
     box_size   = [200., 200., 2000.] # In Mpc/h
-    nc         = [80, 80, 800]       # Number of pixels
+    nc         = [50, 50, 500]       # Number of pixels
     #nc         = [8, 8, 64]         # Number of pixels
-    field_npix = 200                  # Number of pixels in the lensing field
+    field_npix = 100                  # Number of pixels in the lensing field
     sigma_e    = 0.0000              # Standard deviation of galaxy ellipticities
     galaxy_density = 10.             # Galaxy density per arcmin^2, per redshift bin
     compy      = True
@@ -589,11 +589,11 @@ def forward_model():
         numpyro.deterministic('noiseless_convergence_%d'%i, kappa)
 
         #sig = sigma_e/jnp.sqrt(galaxy_density*(field_size*60/field_npix)**2)
-        sig = jnp.ones((field_npix,field_npix))*0.015*3e-7 # FIX
+        sig = jnp.ones((field_npix,field_npix))*0.02 # FIX
         numpyro.sample('kappa_0', dist.Normal(kappa, sig)) 
 
         delta_ell = 50.
-        ell_max   = 2000.
+        ell_max   = 3000.
         pix_size  = (field_size*60)/field_npix
         N         = field_npix
         window = jnp.ones_like(kappa)
@@ -606,10 +606,10 @@ def forward_model():
         compy =  simps(lambda z: comptony_Born(cosmo, planes, coords, z), 0.01, 1.0, N=32)
         numpyro.deterministic('noiseless_comptony', compy)
 
-        sig = jnp.ones((field_npix,field_npix)) # FIX Probably needs some fiddling around 
+        sig = jnp.ones((field_npix,field_npix))*0.02 # FIX Probably needs some fiddling around 
         numpyro.sample('compy_0', dist.Normal(compy, sig)) 
         bell, cls_compy = pspec(compy,compy,window,window,delta_ell,ell_max,pix_size,N)
-        numpyro.deterministic('cls_noiseless_comptony_%d'%i, cls_compy)
+        numpyro.deterministic('cls_noiseless_comptony', cls_compy)
     #return observed_maps
 
 
@@ -654,15 +654,16 @@ nuts_kernel = numpyro.infer.NUTS(
                                  model = observed_model,
                                  init_strategy  = partial(numpyro.infer.init_to_value, values={'omega_c': 0., 'sigma_8': 0. }),
                                  max_tree_depth = 3,
-                                 step_size      = 1.00e-01
+                                 #step_size      = 1.00e-01
                                 )
 
 # Run the sampling 
 mcmc = numpyro.infer.MCMC(
                           nuts_kernel,
-                          num_warmup=0,
-                          num_samples=3,
-                          #chain_method="parallel", num_chains=4,
+                          num_warmup=50,
+                          num_samples=200,
+                          chain_method="parallel",
+                          num_chains=4,
                           # thinning=2,
                           progress_bar=True
                          )
@@ -683,7 +684,6 @@ log_probs = compute_logprob(observed_model, res)
 np.save('logprobs_lensing_fwd_mdl_nbody_0.npy',log_probs)
 
 
-import sys; sys.exit()
 # Resuming from a checkpoint above
 for i in range(10):
     print('round',i,'done')
