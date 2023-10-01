@@ -420,7 +420,7 @@ def convergence_Born(cosmo, density_planes, coords , z_source):
     """
     # Compute constant prefactor:
     c = 299792458
-    A = 3 / 2 * cosmo.Omega_m * (cosmo.h*100 / c)**2
+    A = 3 / 2 * cosmo.Omega_m * (cosmo.h*100 / (c/1000) )**2
 
     # Compute comoving distance of source galaxies
     chi_s = jc.background.radial_comoving_distance(cosmo, 1 / (1 + z_source))
@@ -491,7 +491,7 @@ def comptony_Born(cosmo, planes, coords , z_source, ):
         tgas = planes['Tplanes'][i] # [K]
         Mgas = d*Mpart              # [Msun/(Mpc/h)^3]    
 
-        rhogas = Mgas                   # [Msun/(Mpc/h)^3]
+        rhogas = Mgas/a**3              # [Msun/(Mpc/h)^3]
         const1 = 2.9291000381540527e-11 # (mp/msun)/mue/(mpc2m)**3*kb*m2mpc   precomputed factor to avoid float32 overflow
                                         # -> 1.988e30/(3.086e22)**3*1.38e-23/0.588/1.6726e-27*3.086e22  [kg/Mpc/s^2/K]
 
@@ -500,7 +500,7 @@ def comptony_Born(cosmo, planes, coords , z_source, ):
         A      = 8.125459939612701e-16 #sigT/(me*c*c)  6.6524e-29/9.1093837e-31/299792458**2 # [s^2/kg]
         
         # Interpolate at the density plane coordinates
-        im = map_coordinates(A*pe*dz, coords * chi / dx - 0.5, order=1, mode="wrap")
+        im = map_coordinates(A*pe*a*dz, coords * chi / dx - 0.5, order=1, mode="wrap")
         #print('----------------------------',i,im.shape)
         #import pdb; pdb.set_trace()
         comptony += im * jnp.ones_like(chi_s).reshape([-1, 1, 1]) #<-------Anything bellow and boave 0, 1000 gets set to 0 ,1000
@@ -519,7 +519,7 @@ def forward_model():
     box_size   = [200., 200., 2000.] # In Mpc/h
     nc         = [50, 50, 500]       # Number of pixels
     #nc         = [8, 8, 64]         # Number of pixels
-    field_npix = 100                  # Number of pixels in the lensing field
+    field_npix = 50                  # Number of pixels in the lensing field
     sigma_e    = 0.0000              # Standard deviation of galaxy ellipticities
     galaxy_density = 10.             # Galaxy density per arcmin^2, per redshift bin
     compy      = True
@@ -653,17 +653,17 @@ observed_model = numpyro.handlers.condition(forward_model, {
 nuts_kernel = numpyro.infer.NUTS(
                                  model = observed_model,
                                  init_strategy  = partial(numpyro.infer.init_to_value, values={'omega_c': 0., 'sigma_8': 0. }),
-                                 max_tree_depth = 3,
+                                 #max_tree_depth = 3,
                                  #step_size      = 1.00e-01
                                 )
 
 # Run the sampling 
 mcmc = numpyro.infer.MCMC(
                           nuts_kernel,
-                          num_warmup=50,
-                          num_samples=200,
-                          chain_method="parallel",
-                          num_chains=4,
+                          num_warmup=200,
+                          num_samples=50,
+                          #chain_method="parallel",
+                          #num_chains=4,
                           # thinning=2,
                           progress_bar=True
                          )
@@ -683,6 +683,7 @@ with open('lensing_fwd_mdl_nbody_0.pickle', 'wb') as handle:
 log_probs = compute_logprob(observed_model, res)
 np.save('logprobs_lensing_fwd_mdl_nbody_0.npy',log_probs)
 
+del res,log_probs
 
 # Resuming from a checkpoint above
 for i in range(10):
