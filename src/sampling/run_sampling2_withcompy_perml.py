@@ -29,6 +29,7 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
+import argparse
 
 # Joint loglikelihood of a given map.
 def compute_logprob(conditioned_model, res):
@@ -420,7 +421,7 @@ def convergence_Born(cosmo, density_planes, coords , z_source):
     """
     # Compute constant prefactor:
     c = 299792458
-    A = 3 / 2 * cosmo.Omega_m * (cosmo.h*100 / c)**2
+    A = 3 / 2 * cosmo.Omega_m * (cosmo.h*100 / (c/1000) )**2
 
     # Compute comoving distance of source galaxies
     chi_s = jc.background.radial_comoving_distance(cosmo, 1 / (1 + z_source))
@@ -491,7 +492,7 @@ def comptony_Born(cosmo, planes, coords , z_source, ):
         tgas = planes['Tplanes'][i] # [K]
         Mgas = d*Mpart              # [Msun/(Mpc/h)^3]    
 
-        rhogas = Mgas                   # [Msun/(Mpc/h)^3]
+        rhogas = Mgas/a**3              # [Msun/(Mpc/h)^3]
         const1 = 2.9291000381540527e-11 # (mp/msun)/mue/(mpc2m)**3*kb*m2mpc   precomputed factor to avoid float32 overflow
                                         # -> 1.988e30/(3.086e22)**3*1.38e-23/0.588/1.6726e-27*3.086e22  [kg/Mpc/s^2/K]
 
@@ -500,7 +501,7 @@ def comptony_Born(cosmo, planes, coords , z_source, ):
         A      = 8.125459939612701e-16 #sigT/(me*c*c)  6.6524e-29/9.1093837e-31/299792458**2 # [s^2/kg]
         
         # Interpolate at the density plane coordinates
-        im = map_coordinates(A*pe*dz, coords * chi / dx - 0.5, order=1, mode="wrap")
+        im = map_coordinates(A*pe*a*dz, coords * chi / dx - 0.5, order=1, mode="wrap")
         #print('----------------------------',i,im.shape)
         #import pdb; pdb.set_trace()
         comptony += im * jnp.ones_like(chi_s).reshape([-1, 1, 1]) #<-------Anything bellow and boave 0, 1000 gets set to 0 ,1000
@@ -519,7 +520,7 @@ def forward_model():
     box_size   = [200., 200., 2000.] # In Mpc/h
     nc         = [50, 50, 500]       # Number of pixels
     #nc         = [8, 8, 64]         # Number of pixels
-    field_npix = 100                  # Number of pixels in the lensing field
+    field_npix = 50                  # Number of pixels in the lensing field
     sigma_e    = 0.0000              # Standard deviation of galaxy ellipticities
     galaxy_density = 10.             # Galaxy density per arcmin^2, per redshift bin
     compy      = True
@@ -541,8 +542,8 @@ def forward_model():
     # Sampling cosmological parameters and defines cosmology
     # Note that the parameters are shifted so e.g. Omega_c=0 means Omega_c=0.25
     # This is to ensure that the parameter space is sampled evenly around the fiducial values.
-    Omega_c = numpyro.sample('omega_c', dist.TruncatedNormal(0.,1, low=-1))*0.2 + 0.25
-    sigma_8 = numpyro.sample('sigma_8', dist.Normal(0., 1.))*0.14 + 0.831
+    Omega_c = numpyro.sample('omega_c', dist.TruncatedNormal(0.,1, low=-1))*0.03 + 0.25 ####################*0.2 + 0.25
+    sigma_8 = numpyro.sample('sigma_8', dist.Normal(0., 1.))*0.02 + 0.831              ####################*0.14 + 0.831
     Omega_b, h, n_s, w0 = 0.04, 0.7, 0.96, -1  # fixed parameters
 
     cosmo   = jc.Cosmology(Omega_c=Omega_c, sigma8=sigma_8, Omega_b=Omega_b,
@@ -615,6 +616,13 @@ def forward_model():
 
 #######################################################################################################################
 
+parser  = argparse.ArgumentParser()
+parser.add_argument('--resume', default=False, dest='resume', action='store_true')
+args     = parser.parse_args()
+
+resume     = args.resume
+
+
 # Reading the DC2 tomographic bins into redshift distribution objects
 with h5py.File("shear_photoz_stack.hdf5") as f:
     source   = f["n_of_z"]["source"]
@@ -654,46 +662,85 @@ nuts_kernel = numpyro.infer.NUTS(
                                  model = observed_model,
                                  init_strategy  = partial(numpyro.infer.init_to_value, values={'omega_c': 0., 'sigma_8': 0. }),
                                  max_tree_depth = 3,
-                                 #step_size      = 1.00e-01
+                                 step_size      = 1.27e-02
                                 )
 
 # Run the sampling 
 mcmc = numpyro.infer.MCMC(
                           nuts_kernel,
-                          num_warmup=50,
-                          num_samples=200,
+                          num_warmup=0,
+                          num_samples=50,
                           chain_method="parallel",
                           num_chains=4,
                           # thinning=2,
                           progress_bar=True
                          )
 
-print("---------------STARTING SAMPLING-------------------")
-mcmc.run( jax.random.PRNGKey(0))
-print("-----------------DONE SAMPLING---------------------")
+if resume==False:
 
-res = mcmc.get_samples()
-#sys.exit()
-# Saving an intermediate checkpoint
-with open('lensing_fwd_mdl_nbody_0.pickle', 'wb') as handle:
-    pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    print("---------------STARTING SAMPLING-------------------")
+    mcmc.run( jax.random.PRNGKey(0))
+    print("-----------------DONE SAMPLING---------------------")
 
-
-#Also save loglikelihood of a given map.
-log_probs = compute_logprob(observed_model, res)
-np.save('logprobs_lensing_fwd_mdl_nbody_0.npy',log_probs)
-
-
-# Resuming from a checkpoint above
-for i in range(10):
-    print('round',i,'done')
-    mcmc.post_warmup_state = mcmc.last_state
-    mcmc.run(mcmc.post_warmup_state.rng_key)
     res = mcmc.get_samples()
-    with open('lensing_fwd_mdl_nbody_%d.pickle'%(i+1), 'wb') as handle:
+    #sys.exit()
+    # Saving an intermediate checkpoint
+    with open('lensing_fwd_mdl_nbody_0.pickle', 'wb') as handle:
         pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    #Also save loglikelihood of a given map.
     log_probs = compute_logprob(observed_model, res)
-    np.save('logprobs_lensing_fwd_mdl_nbody_%d.npy'%(i+1),log_probs)
+    np.save('logprobs_lensing_fwd_mdl_nbody_0.npy',log_probs)
+
+    final_state = mcmc.last_state
+    with open('mcmc_state.pkl', 'wb') as f:
+        pickle.dump(final_state, f)
+
+    np.save('saveidx.npy',0)
+    del res,log_probs
+
+    # Resuming from a checkpoint above
+    for i in range(100):
+        print('round',i+1,'done')
+        mcmc.post_warmup_state = mcmc.last_state
+        mcmc.run(mcmc.post_warmup_state.rng_key)
+        res = mcmc.get_samples()
+        with open('lensing_fwd_mdl_nbody_%d.pickle'%(i+1), 'wb') as handle:
+            pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        log_probs = compute_logprob(observed_model, res)
+        np.save('logprobs_lensing_fwd_mdl_nbody_%d.npy'%(i+1),log_probs)
+
+        final_state = mcmc.last_state
+        with open('mcmc_state.pkl', 'wb') as f:
+            pickle.dump(final_state, f)
+        
+        np.save('saveidx.npy',i+1)
+        del res,log_probs
+
+else:
+    # Save
+    with open('mcmc_state.pkl', 'rb') as f:
+        mcmc.post_warmup_state = pickle.load(f)
+
+    i=int(np.load('saveidx.npy'))
+
+    for i in range(i,i+100):
+        print('round',i+1,'done')
+        mcmc.run(mcmc.post_warmup_state.rng_key)
+        res = mcmc.get_samples()
+        with open('lensing_fwd_mdl_nbody_%d.pickle'%(i+1), 'wb') as handle:
+            pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        log_probs = compute_logprob(observed_model, res)
+        np.save('logprobs_lensing_fwd_mdl_nbody_%d.npy'%(i+1),log_probs)
+
+        final_state = mcmc.last_state
+        with open('mcmc_state.pkl', 'wb') as f:
+            pickle.dump(final_state, f)
+
+        np.save('saveidx.npy',i+1)
+        del res,log_probs
+
+
 
 # To open the pickle file use:
 #with open('lensing_fwd_mdl_nbody_0.pickle', 'rb') as handle:
