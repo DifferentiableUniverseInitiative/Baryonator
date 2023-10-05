@@ -1,6 +1,6 @@
 import os,sys
 os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION']='.90'
-import h5py, pickle, jax, jaxpm, numpyro, diffrax#, torch, gpytorch
+import h5py, pickle, jax, jaxpm, numpyro, diffrax
 import haiku as hk
 import numpy as np
 import astropy.units as u
@@ -49,13 +49,11 @@ def rbf_kernel(x1, x2, length_scale=1.4, variance=0.5):
 
 # GP posterior
 def gp_posterior(X_train, y_train, X_test, kernel_func, noise_variance=4e-5):
-    K = kernel_func(X_train, X_train) + noise_variance * jnp.eye(X_train.shape[0])
-    Ks = kernel_func(X_train, X_test)
+    K   = kernel_func(X_train, X_train) + noise_variance * jnp.eye(X_train.shape[0])
+    Ks  = kernel_func(X_train, X_test)
     Kss = kernel_func(X_test, X_test)
-
     K_inv = jnp.linalg.inv(K)
-    mu_s = jnp.dot(Ks.T, jnp.dot(K_inv, y_train))
-
+    mu_s  = jnp.dot(Ks.T, jnp.dot(K_inv, y_train))
     return mu_s
 
 # Function to create k-grid
@@ -133,8 +131,8 @@ def HPM_GPmodel(cosmo,a,delta,psi,logMmin=8,logMmax=16,NM=40,rmin=0.1,rmax=4,Nr=
     del res
     
     #Compute mean matter density in Msun/Mpc^3 to convert rho->delta
-    rhom0    = jc.background.Omega_m_a(cosmo,1.0)*jc.constants.rhocrit*cosmo.h**2 # [(M_sun)/ (Mpc)^{3}]
-    rhommean = rhom0*(a)**-3
+    #rhom0    = jc.background.Omega_m_a(cosmo,1.0)*jc.constants.rhocrit*cosmo.h**2 # [(M_sun)/ (Mpc)^{3}]
+    #rhommean = rhom0*(a)**-3
     
     _delta  = jnp.log10(tabrho).flatten(); del tabrho
     _psi    = jnp.log10(tabpsi).flatten(); del tabpsi
@@ -196,25 +194,14 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
 
     # Planning out the scale factor stepping to extract desired lensplanes
     n_lens     = int(box_size[-1] // density_plane_width)
-    #print("Splitting box with depth %dMpc/h into shells with thickness %dMpc/h -> %d planes"%(box_size[-1], density_plane_width, n_lens) )
-
+    
+    # Define comoving distances 
     chi        = jnp.linspace(0., box_size[-1], n_lens + 1)
     chi_center = 0.5 * (chi[1:] + chi[:-1])
-    #print("These planes correspond to comoving distances (in Mpc/h):")
     
     # Make sure scale factor is within the range of the neural spline
     a_center = jc.background.a_of_chi(cosmology, chi_center)
     a_center = jnp.clip(a_center, 0.25, 0.97)
-    #print("Converted into scale factor (unitless):")
-    '''
-    a_center = jnp.array([0.97366934, 0.95173067, 0.92167276, 0.89296484, 0.86550933, 0.83921653,
-                          0.81368816, 0.78958046, 0.76639086, 0.7440582,  0.72252566, 0.7017416,
-                          0.6816582,  0.66223156, 0.6434214,  0.6251906,  0.6075051,  0.59033346,
-                          0.5734545,  0.55725896, 0.54149497, 0.5261407,  0.5111752,  0.49658,
-                          0.4823374,  0.46843132, 0.4548467,  0.44156992, 0.42858812, 0.41588944,
-                          0.40336218, 0.3912276,  0.37934503, 0.36770567, 0.35630164, 0.3451253,
-                          0.33416978, 0.32338104, 0.31288064, 0.30258247])
-    '''
 
     # Create a small function to generate the matter power spectrum
     kh    = jnp.logspace(-4, 1, 256)                    # h/Mpc
@@ -229,12 +216,13 @@ def get_density_planes(cosmology, density_plane_width     = 100., # In Mpc/h
     
     # Displace of the particles at the initial condition
     cosmology._workspace = {}  # FIX ME: this a temporary fix
-    dx, p, f             = lpt(cosmology, initial_conditions, particles, a=a_init)
+    dx, p, _             = lpt(cosmology, initial_conditions, particles, a=a_init)
 
-    Ge30     = 4.516e-18                     # 6.67e-11*1.99e30/(3.086e22)**3*1e30 = 4.516e-18 [Mpc^3/s^2/Msun]
-    H2e30    = (cosmology.h*100)**2*1.050e-9 # (1/3.086e19)**2*1e30 = 1.050e-9 [1/s^2]
-    rhocrit0 = 3/8/jnp.pi*H2e30/Ge30         # [Msun/Mpc^3]
-    # total particle mass
+    Ge30     = 4.517e-18                     # CHECKED 6.67e-11*1.99e30/(3.086e22)**3*1e30 = 4.516e-18 [Mpc^3/s^2/Msun] 
+    H2e30    = (cosmology.h*100)**2*1.050e-9 # CHECKED (1/3.086e19)**2*1e30 = 1.050e-9 [1/s^2]
+    rhocrit0 = 3/8/jnp.pi*H2e30/Ge30         # CHECKED [Msun/Mpc^3]
+
+    # Total particle mass
     # rhom(z) = Omegam0*rhocrit0/a^3  [Msun/Mpc^3(physical)]
     # totmass = rhom(z)*vol_comov*a^3 -> Omegam0*rhocrit0*vol_comov
     Mpart    = cosmology.Omega_m*rhocrit0*box_size[0]*box_size[1]*box_size[2]/particles.shape[0] #[Msun]  
@@ -474,34 +462,35 @@ def comptony_Born(cosmo, planes, coords , z_source, ):
     '''
 
     # Compute comoving distance of source galaxies
-    chi_s = jc.background.radial_comoving_distance(cosmo, 1 / (1 + z_source))
+    chi_s = jc.background.radial_comoving_distance(cosmo, 1 / (1 + z_source)) # [Mpc/h]
 
     comptony = 0
     n_planes = len(planes['planes'])
 
-    dx = planes['dx']
-    dz = planes['dz']
-    Mpart= planes['Mpart']
+    dx    = planes['dx']    # [Mpc/h]
+    dz    = planes['dz']    # [Mpc/h]
+    Mpart = planes['Mpart'] # [Msun]
 
     print("Starting Compton-y integration")
     for i in range(n_planes):
 
-        chi  = planes['chi'][i]
-        a    = planes['a'][i]
-        d    = planes['planes'][i]  # [npart/(Mpc/h)^3]
+        chi  = planes['chi'][i]     # [Mpc/h]
+        a    = planes['a'][i]       # [unitless]
+        d    = planes['planes'][i]  # [npart/(Mpc/h)^3 -- comoving]
         tgas = planes['Tplanes'][i] # [K]
-        Mgas = d*Mpart              # [Msun/(Mpc/h)^3]    
+        Mgas = d*Mpart*(cosmo.Omega_b/cosmo.Omega_m) # CHECKED [Msun/(Mpc/h)^3 -- comoving]    
 
-        rhogas = Mgas/a**3              # [Msun/(Mpc/h)^3]
-        const1 = 2.9291000381540527e-11 # (mp/msun)/mue/(mpc2m)**3*kb*m2mpc   precomputed factor to avoid float32 overflow
-                                        # -> 1.988e30/(3.086e22)**3*1.38e-23/0.588/1.6726e-27*3.086e22  [kg/Mpc/s^2/K]
+        rhogas = Mgas/a**3              # CHECKED [Msun/(Mpc/h)^3 -- physical]
+        const1 = 1.4728010050999952e-11 # CHECKED (mp/msun)/mue/(mpc2m)**3*kb*m2mpc   precomputed factor to avoid float32 overflow
+                                        # -> 1.988e30/(3.086e22)**3*1.38e-23/1.17/1.6726e-27*3.086e22  [kg/Mpc/s^2/K]
+                                        # note the number mue=1.17, which is the quoted number in Mead 2020.
 
         #pe     = rhogas/(mp/msun)/mue/(mpc2m)**3*cosmo.h**2*kb*tgas # [1/m^3 (phys) m^2/s^2 kg], no more factors of h
         pe     = rhogas*cosmo.h**3*const1*tgas # [kg/Mpc/s^2] , no more factors of h
-        A      = 8.125459939612701e-16 #sigT/(me*c*c)  6.6524e-29/9.1093837e-31/299792458**2 # [s^2/kg]
+        A      = 8.125459939612701e-16 # CHECKED sigT/(me*c*c)  6.6524e-29/9.1093837e-31/299792458**2 # [s^2/kg]
         
         # Interpolate at the density plane coordinates
-        im = map_coordinates(A*pe*a*dz, coords * chi / dx - 0.5, order=1, mode="wrap")
+        im = map_coordinates(A*pe*a*dz/cosmo.h, coords * chi / dx - 0.5, order=1, mode="wrap")
         #print('----------------------------',i,im.shape)
         #import pdb; pdb.set_trace()
         comptony += im * jnp.ones_like(chi_s).reshape([-1, 1, 1]) #<-------Anything bellow and boave 0, 1000 gets set to 0 ,1000
@@ -519,11 +508,11 @@ def forward_model():
     """
     box_size   = [200., 200., 2000.] # In Mpc/h
     nc         = [50, 50, 500]       # Number of pixels
-    #nc         = [8, 8, 64]         # Number of pixels
+    #nc        = [8, 8, 64]         # Number of pixels
     field_npix = 50                  # Number of pixels in the lensing field
     sigma_e    = 0.0000              # Standard deviation of galaxy ellipticities
     galaxy_density = 10.             # Galaxy density per arcmin^2, per redshift bin
-    compy      = True
+    compy       = True
 
     if compy==True:
         return_temperature = True
@@ -542,12 +531,11 @@ def forward_model():
     # Sampling cosmological parameters and defines cosmology
     # Note that the parameters are shifted so e.g. Omega_c=0 means Omega_c=0.25
     # This is to ensure that the parameter space is sampled evenly around the fiducial values.
-    Omega_c = numpyro.sample('omega_c', dist.TruncatedNormal(0.,1, low=-1))*0.03 + 0.25 ####################*0.2 + 0.25
-    sigma_8 = numpyro.sample('sigma_8', dist.Normal(0., 1.))*0.02 + 0.831              ####################*0.14 + 0.831
+    Omega_c = numpyro.sample('omega_c', dist.TruncatedNormal(0.,1, low=-1))*0.02 + 0.25 ####################*0.2 + 0.25
+    sigma_8 = numpyro.sample('sigma_8', dist.Normal(0., 1.))*0.014 + 0.831              ####################*0.14 + 0.831
     Omega_b, h, n_s, w0 = 0.04, 0.7, 0.96, -1  # fixed parameters
 
-    cosmo   = jc.Cosmology(Omega_c=Omega_c, sigma8=sigma_8, Omega_b=Omega_b,
-                           h=h, n_s=n_s, w0=w0, Omega_k=0., wa=0.)
+    cosmo   = jc.Cosmology(Omega_c=Omega_c, sigma8=sigma_8, Omega_b=Omega_b, h=h, n_s=n_s, w0=w0, Omega_k=0., wa=0.)
 
     '''
     # Get total particle mass
@@ -571,7 +559,7 @@ def forward_model():
                                 box_size = box_size, 
                                 neural_spline_params = params,
                                 density_plane_npix = 512,
-                                density_plane_smoothing = 0.75,
+                                density_plane_smoothing = 0.15,
                                 density_plane_width = 100.,
                                 field = field,
                                 return_temperature = return_temperature
@@ -614,20 +602,21 @@ def forward_model():
     #return observed_maps
 
 
-#######################################################################################################################
+##########################################################################################################
 
 parser  = argparse.ArgumentParser()
-parser.add_argument('--resume', default=False, dest='resume', action='store_true')
-args     = parser.parse_args()
-
-resume     = args.resume
-
+#parser.add_argument('resume_state', default=False, dest='resume', action='store_true')
+parser.add_argument('resume_state', default=None, type=int, help='')
+args         = parser.parse_args()
+resume_state = args.resume_state
 
 # Reading the DC2 tomographic bins into redshift distribution objects
 with h5py.File("shear_photoz_stack.hdf5") as f:
     source   = f["n_of_z"]["source"]
     z_shear  = source['z'][::]
-    nz_shear = [jc.redshift.kde_nz(z_shear,source[f"bin_{i}"][:],bw=0.01, zmax=2.5) for i in range(1)]
+    nz       = np.exp(-0.5*((z_shear-0.73)/0.02)**2)/np.sum( np.exp(-0.5*((z_shear-0.73)/0.02)**2)  )/(z_shear[1] - z_shear[0])
+    #nz_shear = [jc.redshift.kde_nz(z_shear,source[f"bin_3"][:],bw=0.01, zmax=2.5) for i in range(1)]
+    nz_shear = [jc.redshift.kde_nz(z_shear,nz,bw=0.01, zmax=2.5) for i in range(1)]
 
 # Loads some correction factors to improve the resolution of the simulation
 params = pickle.load( open( "camels_25_64_pkloss.params", "rb" ) )
@@ -669,21 +658,21 @@ nuts_kernel = numpyro.infer.NUTS(
 mcmc = numpyro.infer.MCMC(
                           nuts_kernel,
                           num_warmup=0,
-                          num_samples=50,
+                          num_samples=200,
                           chain_method="parallel",
                           num_chains=4,
                           # thinning=2,
                           progress_bar=True
                          )
 
-if resume==False:
+if resume_state<0:
 
     print("---------------STARTING SAMPLING-------------------")
     mcmc.run( jax.random.PRNGKey(0))
     print("-----------------DONE SAMPLING---------------------")
 
     res = mcmc.get_samples()
-    #sys.exit()
+    
     # Saving an intermediate checkpoint
     with open('lensing_fwd_mdl_nbody_0.pickle', 'wb') as handle:
         pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -692,53 +681,51 @@ if resume==False:
     log_probs = compute_logprob(observed_model, res)
     np.save('logprobs_lensing_fwd_mdl_nbody_0.npy',log_probs)
 
-    final_state = mcmc.last_state
-    with open('mcmc_state.pkl', 'wb') as f:
-        pickle.dump(final_state, f)
-
-    np.save('saveidx.npy',0)
     del res,log_probs
 
-    # Resuming from a checkpoint above
-    for i in range(100):
-        print('round',i+1,'done')
+    final_state = mcmc.last_state
+    with open('mcmc_state_0.pkl', 'wb') as f:
+        pickle.dump(final_state, f)
+
+
+    # Continue on
+    for i in range(1,500):
+        print('round',i,'done')
         mcmc.post_warmup_state = mcmc.last_state
         mcmc.run(mcmc.post_warmup_state.rng_key)
         res = mcmc.get_samples()
-        with open('lensing_fwd_mdl_nbody_%d.pickle'%(i+1), 'wb') as handle:
+        with open('lensing_fwd_mdl_nbody_%d.pickle'%(i), 'wb') as handle:
             pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
         log_probs = compute_logprob(observed_model, res)
-        np.save('logprobs_lensing_fwd_mdl_nbody_%d.npy'%(i+1),log_probs)
+        np.save('logprobs_lensing_fwd_mdl_nbody_%d.npy'%(i),log_probs)
+
+        del res,log_probs
 
         final_state = mcmc.last_state
-        with open('mcmc_state.pkl', 'wb') as f:
+        with open('mcmc_state_%d.pkl'%i, 'wb') as f:
             pickle.dump(final_state, f)
         
-        np.save('saveidx.npy',i+1)
-        del res,log_probs
 
 else:
     # Save
-    with open('mcmc_state.pkl', 'rb') as f:
+    with open('mcmc_state_%d.pkl'%resume_state, 'rb') as f:
         mcmc.post_warmup_state = pickle.load(f)
 
-    i=int(np.load('saveidx.npy'))
-
-    for i in range(i,i+100):
-        print('round',i+1,'done')
+    for i in range(resume_state+1,resume_state+500):
         mcmc.run(mcmc.post_warmup_state.rng_key)
         res = mcmc.get_samples()
-        with open('lensing_fwd_mdl_nbody_%d.pickle'%(i+1), 'wb') as handle:
+        with open('lensing_fwd_mdl_nbody_%d.pickle'%(i), 'wb') as handle:
             pickle.dump(res, handle, protocol=pickle.HIGHEST_PROTOCOL)
         log_probs = compute_logprob(observed_model, res)
-        np.save('logprobs_lensing_fwd_mdl_nbody_%d.npy'%(i+1),log_probs)
+        np.save('logprobs_lensing_fwd_mdl_nbody_%d.npy'%(i),log_probs)
+
+        del res,log_probs
 
         final_state = mcmc.last_state
-        with open('mcmc_state.pkl', 'wb') as f:
+        with open('mcmc_state_%d.pkl'%i, 'wb') as f:
             pickle.dump(final_state, f)
 
-        np.save('saveidx.npy',i+1)
-        del res,log_probs
+    
 
 
 
