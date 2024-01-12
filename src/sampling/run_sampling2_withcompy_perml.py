@@ -649,7 +649,7 @@ observed_model = numpyro.handlers.condition(forward_model, {
 # Setup the NUT sampler
 nuts_kernel = numpyro.infer.NUTS(
                                  model = observed_model,
-                                 init_strategy  = partial(numpyro.infer.init_to_value, values={'omega_c': 0., 'sigma_8': 0. }),
+                                 init_strategy  = partial(numpyro.infer.init_to_value, values={'omega_c': 0., 'sigma_8': 0., 'initial_conditions': model_trace['initial_conditions']['value'] }),
                                  max_tree_depth = 3,
                                  step_size      = 1.27e-02
                                 )
@@ -658,7 +658,7 @@ nuts_kernel = numpyro.infer.NUTS(
 mcmc = numpyro.infer.MCMC(
                           nuts_kernel,
                           num_warmup=0,
-                          num_samples=200,
+                          num_samples=50,
                           chain_method="parallel",
                           num_chains=4,
                           # thinning=2,
